@@ -3,7 +3,7 @@
 ## Architecture
 
 - `packages/core`: domain state machine, DAG and planning artifacts, SQLite repositories and migrations, Git worktrees, provider-neutral adapters, dispatcher, journaled integration, project runtimes, skills, optional memory, recovery, and preflight.
-- `apps/server`: the `raycoder` CLI, local HTTP API, minimal diagnostic UI, and the explicit real-Codex smoke command.
+- `apps/server`: the `raycoder` CLI, local HTTP API, browser UI, packaged runtime export, and the explicit real-Codex smoke command.
 - `docs/adr`: architectural decisions with meaningful change cost.
 
 The core owns lifecycle transitions. Adapters only manage provider sessions and emit normalized events. The UI only invokes the API and renders persisted state. Each open project owns an independent `ProjectRuntime`; its scheduler is sequential, while different projects may execute in parallel.
@@ -20,6 +20,9 @@ pnpm lint
 pnpm test
 pnpm package:smoke
 pnpm package:npx-smoke
+pnpm dogfood:v1
+pnpm dev:fixture
+pnpm release:artifact
 pnpm dev -- /path/to/project
 pnpm smoke:codex
 ```

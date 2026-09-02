@@ -1,16 +1,22 @@
 {
   "name": "raycoder",
-  "version": "0.1.0",
+  "version": "1.0.0-rc.1",
   "description": "A local, recoverable coding-agent orchestrator",
   "license": "AGPL-3.0-only",
   "type": "module",
   "bin": {
     "raycoder": "./dist/cli.js"
   },
-  "main": "./dist/cli.js",
+  "main": "./dist/runtime.js",
+  "exports": {
+    ".": "./dist/runtime.js",
+    "./cli": "./dist/cli.js"
+  },
   "files": [
     "dist/cli.js",
     "dist/cli.js.map",
+    "dist/runtime.js",
+    "dist/runtime.js.map",
     "dist/README.md",
     "dist/LICENSE",
     "dist/assets"
@@ -31,5 +37,12 @@
   },
   "engines": {
     "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/meconecto/raycoder.git"
   }
 }

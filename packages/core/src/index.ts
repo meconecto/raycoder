@@ -12,6 +12,7 @@ export * from "./memory-service.js";
 export * from "./migrations.js";
 export * from "./preflight.js";
 export * from "./planning-pipeline.js";
+export * from "./preview-manager.js";
 export * from "./process.js";
 export * from "./project-verifier.js";
 export * from "./project-orchestrator.js";
@@ -25,4 +26,4 @@ export * from "./skill-bundle-manager.js";
 export * from "./ticket-actions.js";
 export * from "./ticket-repository.js";
 
-export const RAYCODER_VERSION = "0.1.0";
+export const RAYCODER_VERSION = "1.0.0-rc.1";

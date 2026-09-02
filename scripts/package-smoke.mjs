@@ -2,7 +2,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const workspaceRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const packageRoot = join(workspaceRoot, "apps", "server");
@@ -34,6 +34,10 @@ try {
   if (installedPackage.dependencies?.["@raycoder/core"] !== undefined) {
     throw new Error("Published package still depends on the private workspace core");
   }
+  const runtime = await import(pathToFileURL(join(fixture, "node_modules", "raycoder", "dist", "runtime.js")).href);
+  if (typeof runtime.ProjectRuntime?.open !== "function" || typeof runtime.FakeAgentAdapter !== "function") {
+    throw new Error("Published package does not expose the bundled runtime");
+  }
   const pinnedSkills = join(fixture, "node_modules", "raycoder", "dist", "assets", "skills", "mattpocock");
   const pinned = JSON.parse(readFileSync(join(pinnedSkills, "PINNED.json"), "utf8"));
   if (pinned.commit !== "6654f6b60cd9d5be8b54c6fafe44346dabeb3b76") {
@@ -48,8 +52,9 @@ try {
 }
 
 function exec(command, args, cwd) {
-  const executable = process.platform === "win32" && (command === "pnpm" || command === "npm")
-    ? `${command}.cmd`
-    : command;
-  execFileSync(executable, args, { cwd, stdio: "inherit" });
+  if (process.platform === "win32" && (command === "pnpm" || command === "npm")) {
+    execFileSync(process.env.ComSpec ?? "cmd.exe", ["/d", "/s", "/c", `${command}.cmd`, ...args], { cwd, stdio: "inherit" });
+    return;
+  }
+  execFileSync(command, args, { cwd, stdio: "inherit" });
 }

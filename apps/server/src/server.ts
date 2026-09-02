@@ -248,6 +248,24 @@ async function routeProjects(
     sendJson(response, 200, await runtime.skills.ensureProjectSkills(runtime.projectRoot));
     return true;
   }
+  if (request.method === "GET" && tail === "preview") {
+    sendJson(response, 200, await runtime.preview.status(url.searchParams.get("ticketId") ?? undefined));
+    return true;
+  }
+  if (request.method === "POST" && tail === "preview") {
+    const body = await readJson(request);
+    if (body.action === "start") {
+      sendJson(response, 200, await runtime.preview.start(typeof body.ticketId === "string" ? body.ticketId : undefined));
+      return true;
+    }
+    if (body.action === "stop") {
+      runtime.preview.stop();
+      sendJson(response, 200, await runtime.preview.status());
+      return true;
+    }
+    sendJson(response, 400, { error: "Preview action must be start or stop" });
+    return true;
+  }
   if (request.method === "POST" && tail === "skills/restore") {
     const body = await readJson(request);
     if (body.confirm !== true) {

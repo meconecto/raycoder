@@ -8,6 +8,7 @@ import type { GlobalConfigStore, ReviewMode } from "./global-config.js";
 import { GitIntegrationRecoveryEvidence, IntegrationService } from "./integration-service.js";
 import { NodeProcessRunner, type ProcessRunner } from "./process.js";
 import { PlanningPipeline } from "./planning-pipeline.js";
+import { PreviewManager } from "./preview-manager.js";
 import { ProjectOrchestrator } from "./project-orchestrator.js";
 import type { ProjectVerifier } from "./project-verifier.js";
 import { RecoveryService, type RecoveryResult } from "./recovery.js";
@@ -36,6 +37,7 @@ export class ProjectRuntime {
   public readonly scheduler: Scheduler;
   public readonly tickets: TicketActions;
   public readonly planning: PlanningPipeline;
+  public readonly preview: PreviewManager;
   public readonly skills: SkillBundleManager;
   public readonly settings: SettingsService | null;
   public readonly recovery: readonly RecoveryResult[];
@@ -49,6 +51,7 @@ export class ProjectRuntime {
     scheduler: Scheduler;
     tickets: TicketActions;
     planning: PlanningPipeline;
+    preview: PreviewManager;
     skills: SkillBundleManager;
     settings: SettingsService | null;
     recovery: readonly RecoveryResult[];
@@ -61,6 +64,7 @@ export class ProjectRuntime {
     this.scheduler = input.scheduler;
     this.tickets = input.tickets;
     this.planning = input.planning;
+    this.preview = input.preview;
     this.skills = input.skills;
     this.settings = input.settings;
     this.recovery = input.recovery;
@@ -103,6 +107,7 @@ export class ProjectRuntime {
     const scheduler = new Scheduler(repository, orchestrator, projectRoot);
     const tickets = new TicketActions(repository, orchestrator, scheduler, baseBranch, projectRoot);
     const planning = new PlanningPipeline(repository, options.adapter, projectRoot, baseBranch);
+    const preview = new PreviewManager(repository, projectRoot, runner);
     return new ProjectRuntime({
       projectRoot,
       baseBranch,
@@ -111,6 +116,7 @@ export class ProjectRuntime {
       scheduler,
       tickets,
       planning,
+      preview,
       skills,
       settings,
       recovery,
@@ -123,6 +129,7 @@ export class ProjectRuntime {
   }
 
   public close(): void {
+    this.preview.stop();
     this.repository.close();
   }
 }

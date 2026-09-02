@@ -13,11 +13,7 @@ try {
   exec("pnpm", ["build"], workspaceRoot);
   exec("pnpm", ["pack", "--pack-destination", fixture], packageRoot);
   const tarball = join(fixture, `raycoder-${manifest.version}.tgz`);
-  const output = execFileSync(
-    process.platform === "win32" ? "npm.cmd" : "npm",
-    ["exec", "--yes", `--package=${tarball}`, "--", "raycoder", "--version"],
-    { cwd: fixture, encoding: "utf8" },
-  ).trim();
+  const output = npm(["exec", "--yes", `--package=${tarball}`, "--", "raycoder", "--version"], fixture).trim();
   if (output !== manifest.version) throw new Error(`Unexpected npx version: ${output}`);
   console.log(`PASS npx installed and executed raycoder ${output}`);
 } finally {
@@ -25,8 +21,15 @@ try {
 }
 
 function exec(command, args, cwd) {
-  const executable = process.platform === "win32" && (command === "pnpm" || command === "npm")
-    ? `${command}.cmd`
-    : command;
-  execFileSync(executable, args, { cwd, stdio: "inherit" });
+  if (process.platform === "win32" && (command === "pnpm" || command === "npm")) {
+    execFileSync(process.env.ComSpec ?? "cmd.exe", ["/d", "/s", "/c", `${command}.cmd`, ...args], { cwd, stdio: "inherit" });
+    return;
+  }
+  execFileSync(command, args, { cwd, stdio: "inherit" });
+}
+
+function npm(args, cwd) {
+  return process.platform === "win32"
+    ? execFileSync(process.env.ComSpec ?? "cmd.exe", ["/d", "/s", "/c", "npm.cmd", ...args], { cwd, encoding: "utf8" })
+    : execFileSync("npm", args, { cwd, encoding: "utf8" });
 }

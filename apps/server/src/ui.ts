@@ -3,76 +3,64 @@ export const UI_HTML = `<!doctype html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>raycoder engine</title>
+  <title>raycoder</title>
   <style>
-    :root { color-scheme: dark; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; background:#0b0d10; color:#e6edf3; }
-    body { margin:0; min-height:100vh; background:radial-gradient(circle at 10% 0%,#17202b 0,transparent 34%),#0b0d10; }
-    main { width:min(920px,calc(100% - 32px)); margin:0 auto; padding:56px 0 80px; }
-    header { display:flex; align-items:end; justify-content:space-between; gap:24px; margin-bottom:32px; }
-    h1 { margin:0; font-size:clamp(2rem,6vw,4.2rem); letter-spacing:-.08em; line-height:.9; }
-    header p { margin:0; max-width:440px; color:#8b949e; line-height:1.5; }
-    section { border:1px solid #30363d; background:rgba(13,17,23,.78); border-radius:12px; padding:20px; margin:16px 0; box-shadow:0 20px 50px rgba(0,0,0,.18); }
-    h2 { margin:0 0 16px; font-size:.8rem; letter-spacing:.12em; text-transform:uppercase; color:#8b949e; }
-    .checks,.tickets { display:grid; gap:8px; }
-    .check,.ticket { display:flex; justify-content:space-between; align-items:flex-start; gap:16px; padding:12px; background:#161b22; border-radius:8px; }
-    .ok { color:#3fb950; } .bad { color:#f85149; } .muted { color:#8b949e; }
-    button,select { font:inherit; border:1px solid #3d444d; border-radius:7px; padding:10px 12px; color:#e6edf3; background:#21262d; }
-    button { background:#238636; border-color:#2ea043; cursor:pointer; font-weight:700; }
-    button:disabled { opacity:.45; cursor:not-allowed; }
-    .actions { display:flex; gap:10px; flex-wrap:wrap; }
-    code { color:#79c0ff; }
-    small { color:#8b949e; line-height:1.45; }
-    .error { color:#ff7b72; white-space:pre-wrap; }
-    @media(max-width:650px){ header{align-items:start;flex-direction:column}.check,.ticket{align-items:start;flex-direction:column} }
+    :root{color-scheme:dark;font-family:Inter,ui-sans-serif,system-ui,sans-serif;background:#090b0f;color:#edf1f7;--panel:#11151c;--line:#252c37;--muted:#8f9aaa;--brand:#91e6b5;--blue:#8cc8ff;--bad:#ff8b8b}
+    *{box-sizing:border-box}body{margin:0;min-height:100vh;background:radial-gradient(circle at 20% -10%,#173128 0,transparent 28%),#090b0f}
+    button,input,textarea,select{font:inherit;color:inherit;background:#171d26;border:1px solid #313a47;border-radius:8px;padding:9px 11px}button{cursor:pointer}button:hover{border-color:#91e6b5}button.primary{background:#207a4d;border-color:#35a86c;font-weight:700}button:disabled{opacity:.45;cursor:not-allowed}
+    .shell{display:grid;grid-template-columns:260px minmax(0,1fr);min-height:100vh}.sidebar{border-right:1px solid var(--line);padding:24px 16px;background:rgba(10,13,18,.92);position:sticky;top:0;height:100vh;overflow:auto}
+    .brand{font-size:1.6rem;font-weight:800;letter-spacing:-.06em;margin:0 8px 24px}.brand span{color:var(--brand)}.eyebrow{font-size:.7rem;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin:18px 8px 8px}
+    .project{display:block;width:100%;text-align:left;margin:4px 0;background:transparent;border-color:transparent}.project.active{background:#1a2922;border-color:#315744}.project small{display:block;color:var(--muted);overflow:hidden;text-overflow:ellipsis}
+    .workspace{padding:28px clamp(18px,4vw,54px) 80px;min-width:0}.topbar{display:flex;justify-content:space-between;gap:20px;align-items:flex-start}.topbar h1{margin:0;font-size:clamp(1.8rem,4vw,3.4rem);letter-spacing:-.06em}.topbar p{color:var(--muted);margin:.5rem 0;word-break:break-all}
+    .health{font-size:.8rem;color:var(--muted);max-width:420px;text-align:right}.nav{display:flex;gap:6px;overflow:auto;border-bottom:1px solid var(--line);margin:26px 0 18px}.nav button{border:0;border-bottom:2px solid transparent;border-radius:0;background:transparent;color:var(--muted);white-space:nowrap}.nav button.active{color:#fff;border-bottom-color:var(--brand)}
+    .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}.card{background:rgba(17,21,28,.92);border:1px solid var(--line);border-radius:12px;padding:16px;min-width:0}.card h3{margin:0 0 8px}.card p{color:var(--muted);line-height:1.45}.row{display:flex;align-items:center;justify-content:space-between;gap:12px}.stack{display:grid;gap:10px}.actions{display:flex;gap:8px;flex-wrap:wrap}.status{font-family:ui-monospace,monospace;font-size:.75rem;color:var(--blue);background:#152433;padding:4px 7px;border-radius:999px}.status.DONE{color:var(--brand);background:#14271d}.status.BLOCKED,.status.FAILED{color:var(--bad);background:#301a1d}
+    textarea{width:100%;min-height:120px;resize:vertical}input{width:100%}pre{margin:0;white-space:pre-wrap;word-break:break-word;font:12px/1.55 ui-monospace,monospace;color:#c8d2df}.muted{color:var(--muted)}.error{color:var(--bad);white-space:pre-wrap}.empty{padding:42px;text-align:center;color:var(--muted);border:1px dashed #303744;border-radius:12px}
+    .dag{display:flex;gap:12px;overflow:auto;padding:8px 0 20px}.dag .node{min-width:210px;position:relative}.edge{color:var(--muted);font:12px ui-monospace,monospace}.split{display:grid;grid-template-columns:minmax(0,1fr) minmax(280px,.65fr);gap:14px}.preview-frame{width:100%;height:420px;border:0;border-radius:8px;background:white}
+    dialog{background:#11151c;color:#edf1f7;border:1px solid var(--line);border-radius:12px;width:min(520px,calc(100% - 32px))}dialog::backdrop{background:rgba(0,0,0,.7)}
+    @media(max-width:800px){.shell{display:block}.sidebar{position:static;height:auto;border-right:0;border-bottom:1px solid var(--line)}.split{grid-template-columns:1fr}.health{text-align:left}.topbar{display:block}}
   </style>
 </head>
-<body><main>
-  <header><h1>raycoder</h1><p>Isolated agent workspaces with durable, verified Git integration and conservative crash recovery.</p></header>
-  <section><h2>Preflight</h2><div id="preflight" class="checks">Loading…</div></section>
-  <section>
-    <h2>Engine demo · integration mode: <span id="mode">loading</span></h2>
-    <p><small>This starts a real Codex session and can consume plan quota. If the checkout is dirty, choose explicitly whether to use only its committed head.</small></p>
-    <div class="actions">
-      <select id="dirty-policy" aria-label="Dirty repository policy">
-        <option value="cancel">Cancel when checkout is dirty</option>
-        <option value="committed-head">Use committed head; exclude uncommitted changes</option>
-      </select>
-      <button id="run">Run demo ticket</button>
-    </div>
-    <p id="error" class="error"></p>
-  </section>
-  <section><h2>Tickets</h2><div id="tickets" class="tickets">No tickets yet.</div></section>
-</main>
+<body><div class="shell">
+  <aside class="sidebar">
+    <div class="brand">ray<span>coder</span></div>
+    <div class="eyebrow">Projects</div><div id="projects"></div>
+    <button id="add-project">+ Add project</button>
+    <div class="eyebrow">Runtime</div><div id="sidebar-health" class="muted">Checking…</div>
+  </aside>
+  <main class="workspace">
+    <div class="topbar"><div><h1 id="project-name">Select a project</h1><p id="project-path"></p></div><div id="health" class="health"></div></div>
+    <nav class="nav" id="nav">
+      <button data-tab="overview" class="active">Overview</button><button data-tab="planning">Planning</button><button data-tab="tickets">Tickets</button><button data-tab="dag">DAG</button><button data-tab="history">History</button><button data-tab="sessions">Sessions</button><button data-tab="settings">Settings</button>
+    </nav>
+    <div id="error" class="error"></div><div id="content" class="empty">Open a project to begin.</div>
+  </main>
+</div>
+<dialog id="project-dialog"><form method="dialog" class="stack"><h2>Add project</h2><input id="new-project-path" placeholder="Absolute folder path" required><input id="new-project-name" placeholder="Display name (optional)"><select id="project-action"><option value="register">Open existing Git repository</option><option value="create">Create folder and initialize Git</option></select><div class="actions"><button value="cancel">Cancel</button><button id="save-project" value="default" class="primary">Continue</button></div></form></dialog>
 <script>
-const preflight = document.querySelector('#preflight');
-const tickets = document.querySelector('#tickets');
-const errorBox = document.querySelector('#error');
-const run = document.querySelector('#run');
-const policy = document.querySelector('#dirty-policy');
-const mode = document.querySelector('#mode');
-function esc(value){return String(value).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
-async function json(url, options){const response=await fetch(url,options);const body=await response.json();if(!response.ok)throw new Error(body.error||response.statusText);return body;}
-async function refresh(){
-  try{
-    const report=await json('/api/preflight');
-    const rows=[...report.essential.map(x=>({ok:x.ok,name:x.name,message:x.message})),...report.providers.map(x=>({ok:x.executable,name:x.provider,message:x.diagnostics.map(d=>d.message).join(' · ')}))];
-    preflight.innerHTML=rows.map(x=>'<div class="check"><strong class="'+(x.ok?'ok':'bad')+'">'+(x.ok?'✓ ':'✗ ')+esc(x.name)+'</strong><small>'+esc(x.message)+'</small></div>').join('')+'<small>Upcoming: '+report.upcoming.map(esc).join(', ')+'</small>';
-    run.disabled=!report.canStart;
-    const config=await json('/api/config'); mode.textContent=config.integrationMode;
-    const data=await json('/api/tickets');
-    tickets.innerHTML=data.tickets.length?data.tickets.map(ticketHtml).join(''):'No tickets yet.';
-  }catch(error){errorBox.textContent=error.message;}
-}
-run.addEventListener('click',async()=>{run.disabled=true;errorBox.textContent='';try{await json('/api/demo',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({dirtyPolicy:policy.value})});}catch(error){errorBox.textContent=error.message;}finally{await refresh();}});
-tickets.addEventListener('click',async event=>{const button=event.target.closest('button[data-action]');if(!button)return;button.disabled=true;errorBox.textContent='';try{await json('/api/tickets/'+encodeURIComponent(button.dataset.ticket)+'/integration',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:button.dataset.action,attemptId:button.dataset.attempt})});}catch(error){errorBox.textContent=error.message;}finally{await refresh();}});
-function ticketHtml(t){
-  const a=t.integrationAttempt;
-  const diagnostic=a&&a.diagnosticCode?'<br><small class="error">'+esc(a.diagnosticCode)+' · '+esc(a.diagnosticDetail||'')+'</small>':'';
-  const commits=a?'<br><small>base '+esc(short(a.observedBaseHead))+' → target '+esc(short(a.targetCommit))+(a.verificationStatus?' · verification '+esc(a.verificationStatus):'')+'</small>':'';
-  const confirm=a&&a.status==='AWAITING_CONFIRMATION'?'<button data-action="confirm" data-ticket="'+esc(t.id)+'" data-attempt="'+esc(a.id)+'">Confirm integration</button>':'';
-  const retry=a&&a.status==='BLOCKED'?'<button data-action="retry" data-ticket="'+esc(t.id)+'">Retry integration</button>':'';
-  return '<div class="ticket"><div><strong>'+esc(t.title)+'</strong><br><small>'+esc(t.id)+'</small>'+commits+diagnostic+(t.error?'<br><small class="error">'+esc(t.error)+'</small>':'')+'</div><div><code>'+esc(t.status)+'</code><br>'+confirm+retry+'</div></div>';
-}
-function short(value){return value?String(value).slice(0,10):'—';}
-refresh(); setInterval(refresh,1500);
+const state={projects:[],project:null,tab:'overview',tickets:[],dependencies:[],planning:null,capabilities:null};
+const $=selector=>document.querySelector(selector);const content=$('#content'),errorBox=$('#error');
+function esc(value){return String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+async function json(url,options){const response=await fetch(url,options);const body=await response.json();if(!response.ok)throw new Error(body.error||response.statusText);return body;}
+async function loadProjects(){const result=await json('/api/projects');state.projects=result.projects;renderProjects();if(!state.project){const first=state.projects.find(x=>x.open)||state.projects[0];if(first)await selectProject(first.project.id);}}
+function renderProjects(){$('#projects').innerHTML=state.projects.map(x=>'<button class="project '+(state.project&&state.project.id===x.project.id?'active':'')+'" data-project="'+esc(x.project.id)+'"><strong>'+esc(x.project.name)+'</strong><small>'+(x.open?'open · ':'')+esc(x.project.path)+'</small></button>').join('')||'<p class="muted">No projects yet.</p>';}
+async function selectProject(id){let item=state.projects.find(x=>x.project.id===id);if(!item)return;if(!item.open){await json('/api/projects/'+encodeURIComponent(id)+'/open',{method:'POST'});await loadProjects();return;}state.project=item.project;$('#project-name').textContent=item.project.name;$('#project-path').textContent=item.project.path;renderProjects();await refreshProject();}
+function base(){return '/api/projects/'+encodeURIComponent(state.project.id);}
+async function refreshProject(){if(!state.project)return;const [ticketData,dependencyData,planning,capabilities]=await Promise.all([json(base()+'/tickets'),json(base()+'/dependencies'),json(base()+'/planning'),json(base()+'/capabilities')]);state.tickets=ticketData.tickets;state.dependencies=dependencyData.dependencies;state.planning=planning;state.capabilities=capabilities;render();}
+function render(){errorBox.textContent='';const fn={overview:renderOverview,planning:renderPlanning,tickets:renderTickets,dag:renderDag,history:renderHistory,sessions:renderSessions,settings:renderSettings}[state.tab];fn();}
+function ticketCard(t){const a=t.integrationAttempt;const buttons=[];if(t.status==='READY')buttons.push('<button data-ticket-action="run" data-ticket="'+esc(t.id)+'" class="primary">Run</button>');if(['FAILED','BLOCKED','INTERRUPTED','CHANGES_REQUESTED'].includes(t.status))buttons.push('<button data-ticket-action="retry" data-ticket="'+esc(t.id)+'">Retry</button>');if(a&&a.status==='AWAITING_CONFIRMATION')buttons.push('<button data-ticket-action="confirm" data-attempt="'+esc(a.id)+'" data-ticket="'+esc(t.id)+'" class="primary">Confirm</button>');if(!['DONE','CANCELLED'].includes(t.status))buttons.push('<button data-ticket-action="cancel" data-ticket="'+esc(t.id)+'">Cancel</button>');return '<article class="card"><div class="row"><h3>'+esc(t.title)+'</h3><span class="status '+esc(t.status)+'">'+esc(t.status)+'</span></div><p>'+esc(t.description)+'</p><small class="muted">'+esc(t.id)+(t.branch?' · '+esc(t.branch):'')+'</small>'+(t.review?'<p><small>Review: '+esc(t.review.verdict)+' — '+esc(t.review.summary)+'</small></p>':'')+(a&&a.diagnosticCode?'<p class="error">'+esc(a.diagnosticCode)+' · '+esc(a.diagnosticDetail)+'</p>':'')+'<div class="actions">'+buttons.join('')+'</div></article>';}
+function renderOverview(){const counts=Object.fromEntries(state.tickets.map(t=>t.status).map(status=>[status,state.tickets.filter(t=>t.status===status).length]));content.className='stack';content.innerHTML='<div class="grid"><article class="card"><h3>Tickets</h3><p>'+state.tickets.length+' total · '+(counts.DONE||0)+' done · '+(counts.READY||0)+' ready</p></article><article class="card"><h3>Planning</h3><p>'+state.planning.artifacts.length+' versioned artifacts</p></article><article class="card"><h3>Provider</h3><p>'+esc(state.capabilities.provider)+' · '+state.capabilities.models.length+' model option(s)</p></article></div><div class="split"><section><h2>Frontier</h2><div class="grid">'+(state.tickets.filter(t=>['READY','RUNNING','REVIEW','CHANGES_REQUESTED','READY_TO_MERGE','BLOCKED'].includes(t.status)).map(ticketCard).join('')||'<div class="empty">No active tickets.</div>')+'</div></section><section class="card"><div class="row"><h3>Preview</h3><div class="actions"><button data-preview="start">Start</button><button data-preview="stop">Stop</button></div></div><div id="preview">Loading…</div></section></div>';void refreshPreview();}
+function renderPlanning(){const artifacts=state.planning.artifacts;content.className='stack';content.innerHTML='<div class="grid">'+artifacts.map(a=>'<article class="card"><div class="row"><h3>'+esc(a.kind)+' v'+a.revision+'</h3><span class="status">'+esc(a.status)+'</span></div><pre>'+esc(JSON.stringify(a.content,null,2))+'</pre>'+(a.status==='draft'?'<button data-artifact-approve="'+esc(a.id)+'">Approve</button>':'')+'</article>').join('')+'</div><article class="card"><h3>New planning artifact</h3><select id="artifact-kind"><option value="interrogation">Interrogation</option><option value="spec">Spec</option></select><textarea id="artifact-markdown" placeholder="Confirmed decisions or spec markdown"></textarea><select id="artifact-predecessor"><option value="">No predecessor</option>'+artifacts.filter(a=>a.status==='approved').map(a=>'<option value="'+esc(a.id)+'">'+esc(a.kind)+' v'+a.revision+'</option>').join('')+'</select><button id="create-artifact" class="primary">Save revision</button></article><article class="card"><h3>Propose ticket DAG</h3><p>JSON array with id, title, description and predecessorIds. The DAG remains read-only until confirmation.</p><select id="ticket-spec">'+artifacts.filter(a=>a.kind==='spec'&&a.status==='approved').map(a=>'<option value="'+esc(a.id)+'">spec v'+a.revision+'</option>').join('')+'</select><textarea id="ticket-plan">[{"id":"ticket-1","title":"First slice","description":"End-to-end behavior","predecessorIds":[]}]</textarea><button id="propose-tickets">Validate proposal</button></article>'+(artifacts.filter(a=>a.kind==='tickets'&&a.status==='draft').map(a=>'<article class="card"><h3>Pending DAG confirmation</h3><button class="primary" data-confirm-plan="'+esc(a.id)+'">Confirm and create tickets</button></article>').join(''));}
+function renderTickets(){content.className='stack';content.innerHTML='<div class="grid">'+(state.tickets.map(ticketCard).join('')||'<div class="empty">No tickets.</div>')+'</div><article class="card"><h3>Create ticket</h3><input id="ticket-title" placeholder="Title"><textarea id="ticket-description" placeholder="What this vertical slice delivers"></textarea><input id="ticket-predecessors" placeholder="Predecessor ids, comma separated"><button id="create-ticket" class="primary">Create</button></article>';}
+function renderDag(){content.className='stack';content.innerHTML='<p class="muted">Read-only dependency graph. Only DONE satisfies an edge.</p><div class="dag">'+state.tickets.map(t=>{const blockers=state.dependencies.filter(e=>e.ticketId===t.id).map(e=>e.predecessorId);return '<article class="card node"><div class="row"><strong>'+esc(t.title)+'</strong><span class="status '+esc(t.status)+'">'+esc(t.status)+'</span></div><p class="edge">blocked by: '+(blockers.map(esc).join(', ')||'none')+'</p></article>';}).join('')+'</div>';}
+async function renderHistory(){content.className='stack';content.innerHTML='<div class="empty">Loading history…</div>';const rows=await Promise.all(state.tickets.map(async t=>({ticket:t,data:await json(base()+'/tickets/'+encodeURIComponent(t.id)+'/history')})));content.innerHTML=rows.map(x=>'<article class="card"><h3>'+esc(x.ticket.title)+'</h3><pre>'+esc(x.data.history.map(h=>h.createdAt+'  '+(h.fromStatus||'∅')+' → '+h.toStatus+'  '+h.reason).join('\\n'))+'</pre></article>').join('')||'<div class="empty">No history.</div>';}
+async function renderSessions(){content.className='stack';content.innerHTML='<div class="empty">Loading sessions…</div>';const rows=await Promise.all(state.tickets.map(async t=>({ticket:t,data:await json(base()+'/tickets/'+encodeURIComponent(t.id)+'/sessions')})));content.innerHTML=rows.map(x=>'<article class="card"><h3>'+esc(x.ticket.title)+'</h3><pre>'+esc(JSON.stringify(x.data.sessions,null,2))+'</pre></article>').join('')||'<div class="empty">No sessions.</div>';}
+async function renderSettings(){content.className='stack';content.innerHTML='<div class="empty">Loading settings…</div>';const settings=await json(base()+'/settings');content.innerHTML='<div class="grid"><article class="card"><h3>Effective</h3><pre>'+esc(JSON.stringify(settings&&settings.effective,null,2))+'</pre></article><article class="card"><h3>Capabilities</h3><pre>'+esc(JSON.stringify(state.capabilities,null,2))+'</pre></article></div><article class="card"><h3>Project override</h3><textarea id="settings-override">'+esc(JSON.stringify(settings&&settings.override||{},null,2))+'</textarea><button id="save-settings" class="primary">Validate and save</button></article>';}
+async function refreshPreview(){if(!state.project||!$('#preview'))return;const active=state.tickets.find(t=>['RUNNING','REVIEW','CHANGES_REQUESTED','READY_TO_MERGE'].includes(t.status));const status=await json(base()+'/preview'+(active?'?ticketId='+encodeURIComponent(active.id):''));if(!$('#preview'))return;$('#preview').innerHTML=status.url&&status.running?'<iframe class="preview-frame" src="'+esc(status.url)+'"></iframe>':'<pre>'+esc(status.diagnostic||status.logs||('Source: '+status.source+'\\n'+status.root))+'</pre>';}
+async function action(fn){errorBox.textContent='';try{await fn();await refreshProject();}catch(error){errorBox.textContent=error.message;}}
+$('#projects').addEventListener('click',e=>{const button=e.target.closest('[data-project]');if(button)void action(()=>selectProject(button.dataset.project));});
+$('#nav').addEventListener('click',e=>{const button=e.target.closest('[data-tab]');if(!button)return;state.tab=button.dataset.tab;document.querySelectorAll('[data-tab]').forEach(x=>x.classList.toggle('active',x===button));render();});
+content.addEventListener('click',e=>{const target=e.target.closest('button');if(!target||!state.project)return;if(target.dataset.ticketAction){void action(async()=>{const body={action:target.dataset.ticketAction};if(body.action==='confirm')body.attemptId=target.dataset.attempt;await json(base()+'/tickets/'+encodeURIComponent(target.dataset.ticket)+'/actions',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});});return;}if(target.id==='create-ticket'){void action(()=>json(base()+'/tickets',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({title:$('#ticket-title').value,description:$('#ticket-description').value,predecessorIds:$('#ticket-predecessors').value.split(',').map(x=>x.trim()).filter(Boolean)})}));return;}if(target.id==='create-artifact'){void action(()=>json(base()+'/planning/artifacts',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({kind:$('#artifact-kind').value,markdown:$('#artifact-markdown').value,predecessorArtifactId:$('#artifact-predecessor').value||undefined})}));return;}if(target.dataset.artifactApprove){void action(()=>json(base()+'/planning/artifacts/'+encodeURIComponent(target.dataset.artifactApprove)+'/actions',{method:'POST',headers:{'content-type':'application/json'},body:'{"action":"approve"}'}));return;}if(target.id==='propose-tickets'){void action(()=>json(base()+'/planning/artifacts',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({kind:'tickets',tickets:JSON.parse($('#ticket-plan').value),predecessorArtifactId:$('#ticket-spec').value})}));return;}if(target.dataset.confirmPlan){void action(()=>json(base()+'/planning/artifacts/'+encodeURIComponent(target.dataset.confirmPlan)+'/actions',{method:'POST',headers:{'content-type':'application/json'},body:'{"action":"confirm_tickets"}'}));return;}if(target.id==='save-settings'){void action(()=>json(base()+'/settings',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({override:JSON.parse($('#settings-override').value)})}));return;}if(target.dataset.preview){const active=state.tickets.find(t=>['RUNNING','REVIEW','CHANGES_REQUESTED','READY_TO_MERGE'].includes(t.status));void action(()=>json(base()+'/preview',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:target.dataset.preview,ticketId:active&&active.id})}));}});
+$('#add-project').addEventListener('click',()=>$('#project-dialog').showModal());$('#save-project').addEventListener('click',e=>{e.preventDefault();void action(async()=>{const actionName=$('#project-action').value;await json('/api/projects',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:actionName,path:$('#new-project-path').value,name:$('#new-project-name').value||undefined,confirmGitInit:actionName==='create'})});$('#project-dialog').close();state.project=null;await loadProjects();});});
+async function boot(){try{const report=await json('/api/preflight');const provider=report.providers.map(x=>x.provider+': '+(x.executable?'ready':'unavailable')).join(' · ');$('#health').textContent=report.essential.map(x=>x.message).join(' · ')+' · '+provider;$('#sidebar-health').textContent=report.canStart?'Ready':'Needs attention';await loadProjects();}catch(error){errorBox.textContent=error.message;}}
+void boot();setInterval(()=>{if(state.project&&['overview','tickets','dag'].includes(state.tab))void refreshProject();},2500);
 </script></body></html>`;

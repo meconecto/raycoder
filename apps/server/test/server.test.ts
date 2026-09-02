@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Script } from "node:vm";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   Dispatcher,
@@ -73,7 +74,13 @@ describe("minimal server", () => {
         tickets: { integrationAttempt: { status: string } }[];
       };
       expect(tickets.tickets[0]?.integrationAttempt.status).toBe("INTEGRATED");
-      expect(await (await fetch(root)).text()).toContain("raycoder");
+      const html = await (await fetch(root)).text();
+      expect(html).toContain("raycoder");
+      expect(html).toContain("Planning");
+      expect(html).toContain("data-tab=\"dag\"");
+      const inlineScript = html.match(/<script>([\s\S]*?)<\/script>/u)?.[1];
+      expect(inlineScript).toBeDefined();
+      expect(() => new Script(inlineScript ?? "")).not.toThrow();
     } finally {
       await new Promise<void>((resolve, reject) => server.close((error) => error === undefined ? resolve() : reject(error)));
       repository.close();
@@ -224,6 +231,11 @@ describe("minimal server", () => {
       });
       expect(runtime.repository.get("planned").status).toBe("READY");
       expect(await (await fetch(`${root}/skills`)).json()).toMatchObject({ info: { commit: expect.any(String) } });
+      expect(await (await fetch(`${root}/preview`)).json()).toMatchObject({
+        source: "base",
+        mode: "diagnostic",
+        running: false,
+      });
     } finally {
       await new Promise<void>((resolve, reject) => server.close((error) => error === undefined ? resolve() : reject(error)));
       projects.close();

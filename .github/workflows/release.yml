@@ -1,0 +1,46 @@
+name: release candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the tested RC to npm under the next tag
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  candidate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.19.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm typecheck
+      - run: pnpm lint
+      - run: pnpm test
+      - run: pnpm package:smoke
+      - run: pnpm package:npx-smoke
+      - run: pnpm dogfood:v1
+      - run: pnpm release:artifact
+      - uses: actions/upload-artifact@v4
+        with:
+          name: raycoder-1.0.0-rc.1
+          path: artifacts/raycoder-1.0.0-rc.1.tgz
+          if-no-files-found: error
+      - if: ${{ inputs.publish }}
+        run: pnpm release:publish:rc
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

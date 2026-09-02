@@ -12,6 +12,8 @@ await mkdir(outdir, { recursive: true });
 await build({
   entryPoints: {
     cli: join(packageRoot, "src", "cli.ts"),
+    runtime: join(packageRoot, "src", "runtime.ts"),
+    server: join(packageRoot, "src", "server.ts"),
     "smoke-codex": join(packageRoot, "src", "smoke-codex.ts"),
   },
   outdir,
