@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import type { PreflightReport, ProjectManager, ProjectOrchestrator, ProjectRuntime, TicketRepository } from "@raycoder/core";
+import type { MemoryService, PlannedTicket, PreflightReport, ProjectConfigOverride, ProjectManager, ProjectOrchestrator, ProjectRuntime, TicketRepository } from "@raycoder/core";
 import { createTicket } from "@raycoder/core";
 import { UI_HTML } from "./ui.js";
 
@@ -11,6 +11,7 @@ export interface RaycoderServerOptions {
   readonly projectRoot: string;
   readonly baseBranch: string;
   readonly projects?: ProjectManager;
+  readonly memory?: MemoryService;
 }
 
 export function createRaycoderServer(options: RaycoderServerOptions): Server {
@@ -42,7 +43,16 @@ async function route(
     sendJson(response, 200, { integrationMode: options.orchestrator.integrationMode });
     return;
   }
-  if (options.projects !== undefined && await routeProjects(request, response, url, options.projects)) return;
+  if (options.memory !== undefined && request.method === "GET" && url.pathname === "/api/memory") {
+    sendJson(response, 200, await options.memory.preflight(options.projectRoot));
+    return;
+  }
+  if (options.memory !== undefined && request.method === "POST" && url.pathname === "/api/memory/setup") {
+    const body = await readJson(request);
+    sendJson(response, 200, await options.memory.configureCodex(body.confirm === true, options.projectRoot));
+    return;
+  }
+  if (options.projects !== undefined && await routeProjects(request, response, url, options.projects, options.memory)) return;
   if (request.method === "GET" && url.pathname === "/api/tickets") {
     sendJson(response, 200, {
       tickets: options.repository.list().map((ticket) => ({
@@ -105,6 +115,7 @@ async function routeProjects(
   response: ServerResponse,
   url: URL,
   projects: ProjectManager,
+  memory?: MemoryService,
 ): Promise<boolean> {
   if (request.method === "GET" && url.pathname === "/api/projects") {
     sendJson(response, 200, { projects: projects.list() });
@@ -142,6 +153,108 @@ async function routeProjects(
   const runtime = projects.get(projectId);
   if (request.method === "GET" && tail === "capabilities") {
     sendJson(response, 200, await runtime.capabilities());
+    return true;
+  }
+  if (request.method === "GET" && tail === "settings") {
+    sendJson(response, 200, runtime.settings === null ? null : {
+      override: runtime.settings.projectOverride(),
+      effective: await runtime.settings.effective([await runtime.capabilities()]),
+    });
+    return true;
+  }
+  if (request.method === "POST" && tail === "settings") {
+    if (runtime.settings === null) {
+      sendJson(response, 409, { error: "This runtime has no global configuration store" });
+      return true;
+    }
+    const body = await readJson(request);
+    const override = body.override;
+    if (typeof override !== "object" || override === null || Array.isArray(override)) {
+      sendJson(response, 400, { error: "override must be an object" });
+      return true;
+    }
+    const capabilities = [await runtime.capabilities()];
+    const typedOverride = override as ProjectConfigOverride;
+    const effective = await runtime.settings.validateProjectOverride(typedOverride, capabilities);
+    runtime.settings.setProjectOverride(typedOverride);
+    await projects.reopen(projectId);
+    sendJson(response, 200, { override, effective });
+    return true;
+  }
+  if (request.method === "GET" && tail === "memory") {
+    sendJson(response, 200, memory?.connection(projectId, runtime.projectRoot) ?? null);
+    return true;
+  }
+  if (request.method === "GET" && tail === "planning") {
+    const thread = runtime.repository.latestPlanningThread();
+    sendJson(response, 200, {
+      artifacts: runtime.repository.listPlanningArtifacts(),
+      thread,
+      messages: thread === null ? [] : runtime.repository.planningMessages(thread.id),
+    });
+    return true;
+  }
+  if (request.method === "POST" && tail === "planning/artifacts") {
+    const body = await readJson(request);
+    if (body.kind === "interrogation" && typeof body.markdown === "string") {
+      sendJson(response, 201, { artifact: runtime.planning.recordInterrogation(body.markdown) });
+      return true;
+    }
+    if (body.kind === "spec" && typeof body.markdown === "string" && typeof body.predecessorArtifactId === "string") {
+      sendJson(response, 201, { artifact: runtime.planning.recordSpec(body.markdown, body.predecessorArtifactId) });
+      return true;
+    }
+    if (body.kind === "tickets" && Array.isArray(body.tickets) && typeof body.predecessorArtifactId === "string") {
+      sendJson(response, 201, { artifact: runtime.planning.proposeTickets(body.tickets as PlannedTicket[], body.predecessorArtifactId) });
+      return true;
+    }
+    sendJson(response, 400, { error: "Invalid planning artifact payload" });
+    return true;
+  }
+  if (request.method === "POST" && tail === "planning/generate") {
+    const body = await readJson(request);
+    if (
+      (body.kind !== "interrogation" && body.kind !== "spec")
+      || typeof body.instruction !== "string"
+    ) {
+      sendJson(response, 400, { error: "kind interrogation|spec and instruction are required" });
+      return true;
+    }
+    sendJson(response, 201, {
+      artifact: await runtime.planning.generate(
+        body.kind,
+        body.instruction,
+        typeof body.predecessorArtifactId === "string" ? body.predecessorArtifactId : undefined,
+      ),
+    });
+    return true;
+  }
+  const planningAction = /^planning\/artifacts\/([^/]+)\/actions$/u.exec(tail);
+  if (request.method === "POST" && planningAction?.[1] !== undefined) {
+    const artifactId = decodeURIComponent(planningAction[1]);
+    const body = await readJson(request);
+    if (body.action === "approve") {
+      sendJson(response, 200, { artifact: runtime.planning.approve(artifactId) });
+      return true;
+    }
+    if (body.action === "confirm_tickets") {
+      sendJson(response, 200, { tickets: runtime.planning.confirmTickets(artifactId) });
+      return true;
+    }
+    sendJson(response, 400, { error: "Unknown planning action" });
+    return true;
+  }
+  if (request.method === "GET" && tail === "skills") {
+    sendJson(response, 200, await runtime.skills.ensureProjectSkills(runtime.projectRoot));
+    return true;
+  }
+  if (request.method === "POST" && tail === "skills/restore") {
+    const body = await readJson(request);
+    if (body.confirm !== true) {
+      sendJson(response, 400, { error: "Restoring the pinned skill bundle requires confirm=true" });
+      return true;
+    }
+    sendJson(response, 200, await runtime.skills.restoreProjectSkills(runtime.projectRoot));
     return true;
   }
   if (request.method === "GET" && tail === "tickets") {

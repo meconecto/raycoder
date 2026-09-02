@@ -5,6 +5,7 @@ import { resolve, join } from "node:path";
 import {
   CodexAgentAdapter,
   GlobalConfigStore,
+  MemoryService,
   NodeProcessRunner,
   PreflightService,
   ProjectManager,
@@ -32,6 +33,8 @@ async function main(): Promise<void> {
   const adapter = new CodexAgentAdapter();
   const preflight = await new PreflightService([adapter]).run();
   printPreflight(preflight);
+  const memory = new MemoryService();
+  printMemoryPreflight(await memory.preflight());
   if (args[0] === "doctor") {
     await printProjectDiagnostics(resolve(args[1] ?? process.cwd()));
     if (!preflight.canStart) process.exitCode = 1;
@@ -44,11 +47,10 @@ async function main(): Promise<void> {
   }
 
   const requestedProjectPath = resolve(args[0] ?? process.cwd());
-  const config = await configStore.read();
   const registry = new ProjectRegistry(join(homedir(), ".raycoder", "projects.db"));
   const projects = new ProjectManager(registry, () => ({
     adapter: new CodexAgentAdapter(),
-    integrationMode: config.integrationMode,
+    globalConfigStore: configStore,
   }));
   const runtime = await projects.register(requestedProjectPath);
   if (runtime.recovery.length > 0) console.warn(`Recovered ${runtime.recovery.length} uncertain ticket(s) as INTERRUPTED`);
@@ -60,6 +62,7 @@ async function main(): Promise<void> {
     projectRoot: runtime.projectRoot,
     baseBranch: runtime.baseBranch,
     projects,
+    memory,
   });
   const port = Number.parseInt(process.env.RAYCODER_PORT ?? "4317", 10);
   server.listen(port, "127.0.0.1", () => {
@@ -74,6 +77,12 @@ async function main(): Promise<void> {
   process.once("SIGTERM", shutdown);
 }
 
+function printMemoryPreflight(report: Awaited<ReturnType<MemoryService["preflight"]>>): void {
+  for (const diagnostic of report.diagnostics) {
+    console.log(`${diagnostic.level === "ok" ? "✓" : diagnostic.level === "warning" ? "○" : "✗"} ${diagnostic.message}`);
+  }
+}
+
 async function handleConfigCommand(store: GlobalConfigStore, args: readonly string[]): Promise<void> {
   if (args.length === 1 && args[0] === "show") {
     console.log(JSON.stringify(await store.read(), null, 2));
@@ -83,6 +92,24 @@ async function handleConfigCommand(store: GlobalConfigStore, args: readonly stri
     const mode = args[2];
     if (mode !== "auto" && mode !== "confirm") throw usageError();
     console.log(JSON.stringify(await store.setIntegrationMode(mode), null, 2));
+    return;
+  }
+  if (args.length === 3 && args[0] === "set" && args[1] === "review-mode") {
+    const mode = args[2];
+    if (mode !== "self" && mode !== "independent") throw usageError();
+    console.log(JSON.stringify(await store.setReviewMode(mode), null, 2));
+    return;
+  }
+  if (args.length === 6 && args[0] === "set" && args[1] === "stage") {
+    const stage = args[2];
+    if (stage !== "planning" && stage !== "specification" && stage !== "ticketing" && stage !== "implementation" && stage !== "review") {
+      throw usageError();
+    }
+    console.log(JSON.stringify(await store.setStage(stage, {
+      provider: args[3] ?? "",
+      model: args[4] ?? "",
+      effort: args[5] === "none" ? null : args[5] ?? null,
+    }), null, 2));
     return;
   }
   throw usageError();
@@ -101,6 +128,8 @@ function helpText(): string {
     "  npx raycoder doctor [project-directory]",
     "  npx raycoder config show",
     "  npx raycoder config set integration-mode auto|confirm",
+    "  npx raycoder config set review-mode self|independent",
+    "  npx raycoder config set stage <stage> <provider> <model> <effort|none>",
     "  npx raycoder --help | --version",
   ].join("\n");
 }

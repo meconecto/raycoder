@@ -184,6 +184,46 @@ describe("minimal server", () => {
       const sessions = await (await fetch(`${root}/tickets/parent/sessions`)).json() as { sessions: unknown[] };
       expect(sessions.sessions).toHaveLength(2);
       expect(await (await fetch(`${root}/capabilities`)).json()).toMatchObject({ provider: "fake" });
+      const interrogationResponse = await fetch(`${root}/planning/artifacts`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ kind: "interrogation", markdown: "Aligned plan" }),
+      });
+      const interrogation = await interrogationResponse.json() as { artifact: { id: string } };
+      await fetch(`${root}/planning/artifacts/${interrogation.artifact.id}/actions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "approve" }),
+      });
+      const specResponse = await fetch(`${root}/planning/artifacts`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ kind: "spec", markdown: "# Spec", predecessorArtifactId: interrogation.artifact.id }),
+      });
+      const spec = await specResponse.json() as { artifact: { id: string } };
+      await fetch(`${root}/planning/artifacts/${spec.artifact.id}/actions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "approve" }),
+      });
+      const planResponse = await fetch(`${root}/planning/artifacts`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          kind: "tickets",
+          predecessorArtifactId: spec.artifact.id,
+          tickets: [{ id: "planned", title: "Planned", description: "from spec", predecessorIds: [] }],
+        }),
+      });
+      const plan = await planResponse.json() as { artifact: { id: string } };
+      expect(runtime.repository.list().some((ticket) => ticket.id === "planned")).toBe(false);
+      await fetch(`${root}/planning/artifacts/${plan.artifact.id}/actions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "confirm_tickets" }),
+      });
+      expect(runtime.repository.get("planned").status).toBe("READY");
+      expect(await (await fetch(`${root}/skills`)).json()).toMatchObject({ info: { commit: expect.any(String) } });
     } finally {
       await new Promise<void>((resolve, reject) => server.close((error) => error === undefined ? resolve() : reject(error)));
       projects.close();

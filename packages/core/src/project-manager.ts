@@ -50,6 +50,11 @@ export class ProjectManager {
     this.#runtimes.delete(projectId);
   }
 
+  public async reopen(projectId: string): Promise<ProjectRuntime> {
+    this.closeProject(projectId);
+    return await this.open(projectId);
+  }
+
   public close(): void {
     for (const runtime of this.#runtimes.values()) runtime.close();
     this.#runtimes.clear();

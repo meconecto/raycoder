@@ -34,6 +34,14 @@ try {
   if (installedPackage.dependencies?.["@raycoder/core"] !== undefined) {
     throw new Error("Published package still depends on the private workspace core");
   }
+  const pinnedSkills = join(fixture, "node_modules", "raycoder", "dist", "assets", "skills", "mattpocock");
+  const pinned = JSON.parse(readFileSync(join(pinnedSkills, "PINNED.json"), "utf8"));
+  if (pinned.commit !== "6654f6b60cd9d5be8b54c6fafe44346dabeb3b76") {
+    throw new Error("Published skill bundle is not pinned to the expected commit");
+  }
+  if (!readFileSync(join(pinnedSkills, "engineering", "implement", "SKILL.md"), "utf8").includes("Implement the work")) {
+    throw new Error("Published package is missing the engineering skill bundle");
+  }
   console.log(`PASS packaged raycoder ${version} from ${tarball}`);
 } finally {
   rmSync(fixture, { recursive: true, force: true });

@@ -36,12 +36,13 @@ describe("TicketRepository", () => {
       { version: 1, name: "tickets_history_dependencies" },
       { version: 2, name: "integration_attempts" },
       { version: 3, name: "operational_observations_and_reviews" },
+      { version: 4, name: "planning_artifacts_threads_and_settings" },
     ]);
     first.close();
 
     const second = new TicketRepository(path);
     expect(second.get("one").status).toBe("READY");
-    expect(second.appliedMigrations()).toHaveLength(3);
+    expect(second.appliedMigrations()).toHaveLength(4);
     second.close();
   });
 
@@ -63,7 +64,7 @@ describe("TicketRepository", () => {
     const repository = new TicketRepository(path);
     repository.create(fixture("upgraded"));
 
-    expect(repository.appliedMigrations().map((migration) => migration.version)).toEqual([1, 2, 3]);
+    expect(repository.appliedMigrations().map((migration) => migration.version)).toEqual([1, 2, 3, 4]);
     expect(repository.get("upgraded").status).toBe("READY");
     repository.close();
   });

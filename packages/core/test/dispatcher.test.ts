@@ -109,4 +109,23 @@ describe("Dispatcher with deterministic adapter", () => {
     ]);
     repository.close();
   });
+
+  it("supports self-review in the implementation thread", async () => {
+    const projectRoot = await createRepository();
+    const repository = new TicketRepository(":memory:");
+    repository.create(createTicket({
+      id: "self-review",
+      title: "Self review",
+      description: "review in one thread",
+      baseBranch: "main",
+      hasPredecessors: false,
+    }));
+    const adapter = new FakeAgentAdapter();
+    const dispatcher = new Dispatcher(repository, new GitWorkspaceManager(), adapter, adapter, "self");
+
+    expect((await dispatcher.dispatch({ ticketId: "self-review", projectRoot, dirtyPolicy: "cancel" })).status).toBe("READY_TO_MERGE");
+    expect(repository.listAgentSessions("self-review")).toHaveLength(1);
+    expect(repository.reviewDecisions("self-review")[0]?.verdict).toBe("approved");
+    repository.close();
+  });
 });

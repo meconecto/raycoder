@@ -111,6 +111,49 @@ export interface AgentProcessObservation {
   readonly createdAt: string;
 }
 
+export type PlanningArtifactKind = "interrogation" | "spec" | "tickets";
+export type PlanningArtifactStatus = "draft" | "approved" | "superseded";
+
+export interface PlanningArtifact {
+  readonly id: string;
+  readonly kind: PlanningArtifactKind;
+  readonly revision: number;
+  readonly content: unknown;
+  readonly predecessorArtifactId: string | null;
+  readonly status: PlanningArtifactStatus;
+  readonly createdAt: string;
+  readonly approvedAt: string | null;
+}
+
+interface PlanningArtifactRow {
+  id: string;
+  kind: PlanningArtifactKind;
+  revision: number;
+  content_json: string;
+  predecessor_artifact_id: string | null;
+  status: PlanningArtifactStatus;
+  created_at: string;
+  approved_at: string | null;
+}
+
+export interface PlanningThread {
+  readonly id: string;
+  readonly provider: string;
+  readonly providerSessionId: string | null;
+  readonly status: string;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+export interface PlanningMessage {
+  readonly id: number;
+  readonly threadId: string;
+  readonly sequence: number;
+  readonly role: "user" | "assistant" | "system";
+  readonly content: string;
+  readonly createdAt: string;
+}
+
 interface ReviewDecisionRow {
   id: number;
   ticket_id: string;
@@ -205,6 +248,34 @@ export class TicketRepository {
     });
     transaction();
     return this.get(ticket.id);
+  }
+
+  public createMany(entries: readonly { ticket: Ticket; predecessorIds: readonly string[] }[]): Ticket[] {
+    if (entries.length === 0) return [];
+    const existing = this.list();
+    const newIds = entries.map((entry) => entry.ticket.id);
+    if (new Set(newIds).size !== newIds.length || newIds.some((id) => existing.some((ticket) => ticket.id === id))) {
+      throw new Error("Ticket plan contains duplicate or existing ticket ids");
+    }
+    const allIds = [...existing.map((ticket) => ticket.id), ...newIds];
+    const newEdges = entries.flatMap((entry) => [...new Set(entry.predecessorIds)].map((predecessorId) => ({
+      ticketId: entry.ticket.id,
+      predecessorId,
+    })));
+    assertAcyclic(allIds, [...this.dependencies(), ...newEdges]);
+    const transaction = this.#database.transaction(() => {
+      const insertTicket = this.#database.prepare(`INSERT INTO tickets (
+        id, title, description, status, blocked_from, branch, base_branch, base_commit, workspace, created_at, updated_at
+      ) VALUES (@id, @title, @description, @status, @blockedFrom, @branch, @baseBranch, @baseCommit, @workspace, @createdAt, @updatedAt)`);
+      const insertEdge = this.#database.prepare("INSERT INTO ticket_dependencies (ticket_id, predecessor_id) VALUES (?, ?)");
+      for (const entry of entries) {
+        insertTicket.run(entry.ticket);
+        for (const predecessorId of new Set(entry.predecessorIds)) insertEdge.run(entry.ticket.id, predecessorId);
+        this.#recordHistory(entry.ticket.id, null, entry.ticket.status, "created_from_confirmed_plan", entry.ticket.createdAt);
+      }
+    });
+    transaction();
+    return entries.map((entry) => this.get(entry.ticket.id));
   }
 
   public get(id: string): Ticket {
@@ -434,6 +505,119 @@ export class TicketRepository {
         findings: parseStringArray(row.findings_json, `review decision ${row.id}`),
         createdAt: row.created_at,
       }));
+  }
+
+  public createPlanningArtifact(input: {
+    id: string;
+    kind: PlanningArtifactKind;
+    content: unknown;
+    predecessorArtifactId?: string;
+    createdAt?: string;
+  }): PlanningArtifact {
+    if (input.predecessorArtifactId !== undefined) this.getPlanningArtifact(input.predecessorArtifactId);
+    const row = this.#database.prepare("SELECT COALESCE(MAX(revision), 0) AS revision FROM planning_artifacts WHERE kind = ?")
+      .get(input.kind) as { revision: number };
+    const createdAt = input.createdAt ?? new Date().toISOString();
+    this.#database.prepare(`INSERT INTO planning_artifacts
+      (id, kind, revision, content_json, predecessor_artifact_id, status, created_at)
+      VALUES (?, ?, ?, ?, ?, 'draft', ?)`)
+      .run(
+        input.id,
+        input.kind,
+        row.revision + 1,
+        JSON.stringify(input.content),
+        input.predecessorArtifactId ?? null,
+        createdAt,
+      );
+    return this.getPlanningArtifact(input.id);
+  }
+
+  public getPlanningArtifact(id: string): PlanningArtifact {
+    const row = this.#database.prepare("SELECT * FROM planning_artifacts WHERE id = ?").get(id) as PlanningArtifactRow | undefined;
+    if (row === undefined) throw new Error(`Unknown planning artifact: ${id}`);
+    return planningArtifactFromRow(row);
+  }
+
+  public listPlanningArtifacts(kind?: PlanningArtifactKind): PlanningArtifact[] {
+    const rows = kind === undefined
+      ? this.#database.prepare("SELECT * FROM planning_artifacts ORDER BY created_at, rowid").all()
+      : this.#database.prepare("SELECT * FROM planning_artifacts WHERE kind = ? ORDER BY revision").all(kind);
+    return (rows as PlanningArtifactRow[]).map(planningArtifactFromRow);
+  }
+
+  public approvePlanningArtifact(id: string, now = new Date().toISOString()): PlanningArtifact {
+    const artifact = this.getPlanningArtifact(id);
+    if (artifact.status !== "draft") throw new Error(`Planning artifact ${id} is ${artifact.status}, not draft`);
+    const transaction = this.#database.transaction(() => {
+      this.#database.prepare("UPDATE planning_artifacts SET status = 'superseded' WHERE kind = ? AND status = 'approved'")
+        .run(artifact.kind);
+      this.#database.prepare("UPDATE planning_artifacts SET status = 'approved', approved_at = ? WHERE id = ?")
+        .run(now, id);
+    });
+    transaction();
+    return this.getPlanningArtifact(id);
+  }
+
+  public upsertPlanningThread(input: PlanningThread): PlanningThread {
+    this.#database.prepare(`INSERT INTO planning_threads
+      (id, provider, provider_session_id, status, created_at, updated_at)
+      VALUES (@id, @provider, @providerSessionId, @status, @createdAt, @updatedAt)
+      ON CONFLICT(id) DO UPDATE SET provider_session_id = excluded.provider_session_id,
+      status = excluded.status, updated_at = excluded.updated_at`).run(input);
+    return this.getPlanningThread(input.id);
+  }
+
+  public getPlanningThread(id: string): PlanningThread {
+    const row = this.#database.prepare(`SELECT id, provider, provider_session_id AS providerSessionId,
+      status, created_at AS createdAt, updated_at AS updatedAt FROM planning_threads WHERE id = ?`).get(id) as PlanningThread | undefined;
+    if (row === undefined) throw new Error(`Unknown planning thread: ${id}`);
+    return row;
+  }
+
+  public latestPlanningThread(): PlanningThread | null {
+    const row = this.#database.prepare(`SELECT id, provider, provider_session_id AS providerSessionId,
+      status, created_at AS createdAt, updated_at AS updatedAt FROM planning_threads ORDER BY created_at DESC, rowid DESC LIMIT 1`)
+      .get() as PlanningThread | undefined;
+    return row ?? null;
+  }
+
+  public appendPlanningMessage(
+    threadId: string,
+    role: PlanningMessage["role"],
+    content: string,
+    createdAt = new Date().toISOString(),
+  ): PlanningMessage {
+    this.getPlanningThread(threadId);
+    const transaction = this.#database.transaction(() => {
+      const row = this.#database.prepare("SELECT COALESCE(MAX(sequence), -1) + 1 AS sequence FROM planning_messages WHERE thread_id = ?")
+        .get(threadId) as { sequence: number };
+      const result = this.#database.prepare(`INSERT INTO planning_messages
+        (thread_id, sequence, role, content, created_at) VALUES (?, ?, ?, ?, ?)`)
+        .run(threadId, row.sequence, role, content, createdAt);
+      return Number(result.lastInsertRowid);
+    });
+    const id = transaction();
+    return this.planningMessages(threadId).find((message) => message.id === id) as PlanningMessage;
+  }
+
+  public planningMessages(threadId: string): PlanningMessage[] {
+    return this.#database.prepare(`SELECT id, thread_id AS threadId, sequence, role, content,
+      created_at AS createdAt FROM planning_messages WHERE thread_id = ? ORDER BY sequence`)
+      .all(threadId) as PlanningMessage[];
+  }
+
+  public setProjectSetting(key: string, value: unknown, now = new Date().toISOString()): void {
+    this.#database.prepare(`INSERT INTO project_settings (key, value_json, updated_at) VALUES (?, ?, ?)
+      ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at`)
+      .run(key, JSON.stringify(value), now);
+  }
+
+  public projectSettings(): Readonly<Record<string, unknown>> {
+    const rows = this.#database.prepare("SELECT key, value_json FROM project_settings ORDER BY key").all() as {
+      key: string;
+      value_json: string;
+    }[];
+    return Object.fromEntries(rows.map((row) => [row.key, JSON.parse(row.value_json) as unknown]));
   }
 
   public createIntegrationAttempt(input: CreateIntegrationAttempt): IntegrationAttempt {
@@ -696,4 +880,17 @@ function parseStringArray(json: string, label: string): string[] {
     throw new Error(`Invalid string array persisted for ${label}`);
   }
   return value as string[];
+}
+
+function planningArtifactFromRow(row: PlanningArtifactRow): PlanningArtifact {
+  return {
+    id: row.id,
+    kind: row.kind,
+    revision: row.revision,
+    content: JSON.parse(row.content_json) as unknown,
+    predecessorArtifactId: row.predecessor_artifact_id,
+    status: row.status,
+    createdAt: row.created_at,
+    approvedAt: row.approved_at,
+  };
 }

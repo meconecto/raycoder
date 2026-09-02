@@ -10,9 +10,11 @@ export interface VerificationResult {
   readonly diagnosticDetail: string | null;
 }
 
-export interface ProjectVerifier {
+export interface VerificationStrategy {
   verify(projectRoot: string): Promise<VerificationResult>;
 }
+
+export type ProjectVerifier = VerificationStrategy;
 
 type PackageManager = "pnpm" | "npm" | "yarn" | "bun";
 
@@ -30,7 +32,7 @@ const lockfiles: Readonly<Record<PackageManager, readonly string[]>> = {
 
 const verificationScriptOrder = ["typecheck", "lint", "test", "build"] as const;
 
-export class NodeProjectVerifier implements ProjectVerifier {
+export class NodeProjectVerifier implements VerificationStrategy {
   readonly #runner: ProcessRunner;
 
   public constructor(runner: ProcessRunner = new NodeProcessRunner()) {

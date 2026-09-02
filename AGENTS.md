@@ -2,7 +2,7 @@
 
 ## Architecture
 
-- `packages/core`: domain state machine, DAG rules, SQLite repositories and migrations, Git worktrees, provider-neutral adapters, dispatcher, journaled integration, recovery, and preflight.
+- `packages/core`: domain state machine, DAG and planning artifacts, SQLite repositories and migrations, Git worktrees, provider-neutral adapters, dispatcher, journaled integration, project runtimes, skills, optional memory, recovery, and preflight.
 - `apps/server`: the `raycoder` CLI, local HTTP API, minimal diagnostic UI, and the explicit real-Codex smoke command.
 - `docs/adr`: architectural decisions with meaningful change cost.
 
@@ -37,6 +37,8 @@ The standard test suite must remain offline, deterministic, credential-free, and
 - Do not delete failed/interrupted workspaces or branches automatically.
 - Do not add future provider adapters or provider-specific probes prematurely.
 - Do not bypass a project's scheduler for dispatch, review, integration or ticket recovery actions.
+- Do not create or alter the executable ticket DAG from an unconfirmed planning artifact.
+- Do not overwrite project-local skills except through the explicit full-restore action.
 
 ## Definition of done
 

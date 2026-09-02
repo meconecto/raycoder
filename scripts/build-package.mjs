@@ -1,4 +1,4 @@
-import { copyFile, mkdir, rm } from "node:fs/promises";
+import { copyFile, cp, mkdir, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
@@ -28,3 +28,4 @@ await build({
 });
 await copyFile(join(workspaceRoot, "README.md"), join(outdir, "README.md"));
 await copyFile(join(workspaceRoot, "LICENSE"), join(outdir, "LICENSE"));
+await cp(join(workspaceRoot, "assets"), join(outdir, "assets"), { recursive: true });

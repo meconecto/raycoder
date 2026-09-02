@@ -147,6 +147,51 @@ export const migrations: readonly Migration[] = [
       CREATE INDEX review_decisions_ticket ON review_decisions(ticket_id, created_at);
     `,
   },
+  {
+    version: 4,
+    name: "planning_artifacts_threads_and_settings",
+    sql: `
+      CREATE TABLE planning_threads (
+        id TEXT PRIMARY KEY,
+        provider TEXT NOT NULL,
+        provider_session_id TEXT,
+        status TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE planning_artifacts (
+        id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL CHECK (kind IN ('interrogation', 'spec', 'tickets')),
+        revision INTEGER NOT NULL,
+        content_json TEXT NOT NULL,
+        predecessor_artifact_id TEXT REFERENCES planning_artifacts(id) ON DELETE RESTRICT,
+        status TEXT NOT NULL CHECK (status IN ('draft', 'approved', 'superseded')),
+        created_at TEXT NOT NULL,
+        approved_at TEXT,
+        UNIQUE (kind, revision)
+      );
+
+      CREATE TABLE planning_messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        thread_id TEXT NOT NULL REFERENCES planning_threads(id) ON DELETE CASCADE,
+        sequence INTEGER NOT NULL,
+        role TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'system')),
+        content TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE (thread_id, sequence)
+      );
+
+      CREATE TABLE project_settings (
+        key TEXT PRIMARY KEY,
+        value_json TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE INDEX planning_artifacts_kind_revision ON planning_artifacts(kind, revision);
+      CREATE INDEX planning_messages_thread_sequence ON planning_messages(thread_id, sequence);
+    `,
+  },
 ] as const;
 
 export function migrate(database: Database.Database): void {

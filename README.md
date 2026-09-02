@@ -17,7 +17,7 @@ npx --package ./artifacts/raycoder-0.1.0.tgz raycoder doctor /path/to/project
 ```
 
 `raycoder doctor` checks Node, the bundled Codex runtime, ChatGPT authentication and the
-target Git repository without creating project metadata. Start the local application with
+optional Engram MCP setup, and the target Git repository without creating project metadata. Start the local application with
 `npx raycoder /path/to/project`.
 
 ## Development
@@ -59,6 +59,12 @@ Projects are catalogued globally and opened as independent runtimes. The API is 
 capabilities and lifecycle actions. Mutations are serialized per project; different projects
 can run concurrently. The legacy single-project diagnostic endpoints remain available for
 the initial screen.
+
+Planning artifacts follow `interrogation → spec → tickets`. Every revision is durable, and
+the ticket DAG is created only after the proposed plan is confirmed and revalidated for
+cycles. A pinned MIT-licensed snapshot of `mattpocock/skills` is copied into each project's
+untracked `.raycoder/skills` directory. Engram is optional; install it separately and run
+`engram setup codex` to expose durable memory over MCP.
 
 ## License
 

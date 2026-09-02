@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { AgentAdapter, AgentSession } from "./agent-adapter.js";
 import type { DirtyWorkspacePolicy, GitWorkspaceManager } from "./git-workspace.js";
+import type { ReviewMode } from "./global-config.js";
 import type { Ticket } from "./domain.js";
 import type { GitMetadata, TicketRepository } from "./ticket-repository.js";
 
@@ -42,6 +43,7 @@ export class Dispatcher {
   readonly #workspaces: GitWorkspaceManager;
   readonly #adapter: AgentAdapter;
   readonly #reviewAdapter: AgentAdapter;
+  readonly #reviewMode: ReviewMode;
   #active: ActiveDispatch | null = null;
 
   public constructor(
@@ -49,11 +51,13 @@ export class Dispatcher {
     workspaces: GitWorkspaceManager,
     adapter: AgentAdapter,
     reviewAdapter: AgentAdapter = adapter,
+    reviewMode: ReviewMode = "independent",
   ) {
     this.#repository = repository;
     this.#workspaces = workspaces;
     this.#adapter = adapter;
     this.#reviewAdapter = reviewAdapter;
+    this.#reviewMode = reviewMode;
   }
 
   public async dispatch(request: DispatchRequest): Promise<Ticket> {
@@ -151,29 +155,47 @@ export class Dispatcher {
         source: "implementation_completed",
       });
 
-      this.#repository.updateAgentSession(persistedSessionId, { status: "completed" });
       this.#repository.transition(ticket.id, "REVIEW", "implementation_committed");
-
-      const reviewSession = await this.#reviewAdapter.startSession({
-        workspace: metadata.workspace,
-        purpose: "review",
-        ...(request.model === undefined ? {} : { model: request.model }),
-        ...(request.effort === undefined ? {} : { effort: request.effort }),
-      });
+      let reviewSession: AgentSession;
+      let reviewSessionId: string;
+      let reviewSequence: number;
+      let activeReviewAdapter: AgentAdapter;
+      if (this.#reviewMode === "self") {
+        reviewSession = session;
+        reviewSessionId = persistedSessionId;
+        reviewSequence = implementation.nextSequence;
+        activeReviewAdapter = this.#adapter;
+      } else {
+        this.#repository.updateAgentSession(persistedSessionId, { status: "completed" });
+        reviewSession = await this.#reviewAdapter.startSession({
+          workspace: metadata.workspace,
+          purpose: "review",
+          ...(request.model === undefined ? {} : { model: request.model }),
+          ...(request.effort === undefined ? {} : { effort: request.effort }),
+        });
+        reviewSessionId = randomUUID();
+        reviewSequence = 0;
+        activeReviewAdapter = this.#reviewAdapter;
+        const reviewStartedAt = new Date().toISOString();
+        this.#repository.createAgentSession({
+          id: reviewSessionId,
+          ticketId: ticket.id,
+          provider: reviewSession.provider,
+          providerSessionId: reviewSession.providerSessionId ?? null,
+          status: "running",
+          role: "review",
+          createdAt: reviewStartedAt,
+          updatedAt: reviewStartedAt,
+        });
+      }
       this.#active = { ticketId: ticket.id, session: reviewSession };
-      const reviewSessionId = randomUUID();
-      const reviewStartedAt = new Date().toISOString();
-      this.#repository.createAgentSession({
-        id: reviewSessionId,
-        ticketId: ticket.id,
-        provider: reviewSession.provider,
-        providerSessionId: reviewSession.providerSessionId ?? null,
-        status: "running",
-        role: "review",
-        createdAt: reviewStartedAt,
-        updatedAt: reviewStartedAt,
-      });
-      const review = await this.#runStage(reviewSession, reviewPrompt(ticket), reviewSessionId, 0, this.#reviewAdapter);
+      const review = await this.#runStage(
+        reviewSession,
+        reviewPrompt(ticket),
+        reviewSessionId,
+        reviewSequence,
+        activeReviewAdapter,
+      );
       if (!review.result.success) {
         return this.#finishError(ticket.id, review.result, reviewSessionId);
       }

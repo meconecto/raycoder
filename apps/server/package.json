@@ -12,7 +12,8 @@
     "dist/cli.js",
     "dist/cli.js.map",
     "dist/README.md",
-    "dist/LICENSE"
+    "dist/LICENSE",
+    "dist/assets"
   ],
   "scripts": {
     "build": "node ../../scripts/build-package.mjs",
