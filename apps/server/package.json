@@ -1,6 +1,6 @@
 {
   "name": "raycoder",
-  "version": "1.0.0-rc.1",
+  "version": "1.0.0-rc.2",
   "description": "A local, recoverable coding-agent orchestrator",
   "license": "AGPL-3.0-only",
   "type": "module",

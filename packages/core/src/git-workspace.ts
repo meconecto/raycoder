@@ -1,7 +1,7 @@
 import { realpathSync } from "node:fs";
 import { mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { NodeProcessRunner, type ProcessRunner } from "./process.js";
+import { NodeProcessRunner, ProcessExecutionError, type ProcessRunner } from "./process.js";
 import type { GitMetadata } from "./ticket-repository.js";
 
 export type DirtyWorkspacePolicy = "cancel" | "committed-head";
@@ -59,6 +59,36 @@ export class GitWorkspaceManager {
     return (await this.#git(workspace, ["rev-parse", "HEAD"])).stdout.trim();
   }
 
+  public async agentWritableDirectories(workspace: string, branch: string): Promise<readonly string[]> {
+    const expectedRef = `refs/heads/${branch}`;
+    let currentRef = "";
+    try {
+      currentRef = (await this.#git(workspace, ["symbolic-ref", "--quiet", "HEAD"])).stdout.trim();
+    } catch (error) {
+      if (!(error instanceof ProcessExecutionError) || error.result.exitCode !== 1) throw error;
+    }
+    if (currentRef !== expectedRef) {
+      throw new Error(`Workspace is on ${currentRef || "a detached HEAD"}, expected ${expectedRef}`);
+    }
+
+    const commonDirectory = canonicalPath(
+      (await this.#git(workspace, ["rev-parse", "--path-format=absolute", "--git-common-dir"])).stdout.trim(),
+    );
+    const candidates = [
+      (await this.#git(workspace, ["rev-parse", "--absolute-git-dir"])).stdout.trim(),
+      await this.#absoluteGitPath(workspace, "objects"),
+      dirname(await this.#absoluteGitPath(workspace, expectedRef)),
+      dirname(await this.#absoluteGitPath(workspace, `logs/${expectedRef}`)),
+    ].map((path) => canonicalPath(path));
+
+    for (const path of candidates) {
+      if (!isPathInsideOrEqual(commonDirectory, path)) {
+        throw new Error(`Git metadata path escaped the common Git directory: ${path}`);
+      }
+    }
+    return [...new Set(candidates)];
+  }
+
   async #excludeMetadata(projectRoot: string): Promise<void> {
     const gitPath = (await this.#git(projectRoot, ["rev-parse", "--git-path", "info/exclude"])).stdout.trim();
     const excludePath = isAbsolute(gitPath) ? gitPath : resolve(projectRoot, gitPath);
@@ -75,6 +105,11 @@ export class GitWorkspaceManager {
     }
   }
 
+  async #absoluteGitPath(workspace: string, path: string): Promise<string> {
+    const output = (await this.#git(workspace, ["rev-parse", "--path-format=absolute", "--git-path", path])).stdout.trim();
+    return isAbsolute(output) ? output : resolve(workspace, output);
+  }
+
   async #git(cwd: string, args: readonly string[]) {
     return await this.#runner.run("git", args, { cwd, timeoutMs: 30_000 });
   }
@@ -83,6 +118,11 @@ export class GitWorkspaceManager {
 export function isPathInside(parent: string, child: string): boolean {
   const path = relative(canonicalPath(parent), canonicalPath(child));
   return path !== "" && !path.startsWith("..") && !isAbsolute(path);
+}
+
+function isPathInsideOrEqual(parent: string, child: string): boolean {
+  const path = relative(canonicalPath(parent), canonicalPath(child));
+  return path === "" || (!path.startsWith("..") && !isAbsolute(path));
 }
 
 function canonicalPath(input: string): string {

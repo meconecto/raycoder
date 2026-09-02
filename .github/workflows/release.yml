@@ -37,8 +37,8 @@ jobs:
       - run: pnpm release:artifact
       - uses: actions/upload-artifact@v4
         with:
-          name: raycoder-1.0.0-rc.1
-          path: artifacts/raycoder-1.0.0-rc.1.tgz
+          name: raycoder-release-candidate
+          path: artifacts/raycoder-*.tgz
           if-no-files-found: error
       - if: ${{ inputs.publish }}
         run: pnpm release:publish:rc

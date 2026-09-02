@@ -30,6 +30,9 @@ export class SdkCodexRuntime implements CodexRuntime {
       approvalPolicy: "never" as const,
       networkAccessEnabled: false,
       skipGitRepoCheck: false,
+      ...(input.additionalWritableDirectories === undefined
+        ? {}
+        : { additionalDirectories: [...input.additionalWritableDirectories] }),
       ...(input.model === undefined ? {} : { model: input.model }),
       ...(input.effort === undefined ? {} : { modelReasoningEffort: input.effort as ModelReasoningEffort }),
     };

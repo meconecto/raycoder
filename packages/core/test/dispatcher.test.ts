@@ -2,6 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import type { AgentAdapter, AgentEvent, AgentSession, StartSessionInput } from "../src/agent-adapter.js";
 import { createTicket } from "../src/domain.js";
 import { Dispatcher } from "../src/dispatcher.js";
 import { FakeAgentAdapter } from "../src/fake-agent-adapter.js";
@@ -11,6 +12,22 @@ import { TicketRepository } from "../src/ticket-repository.js";
 
 const temporaryDirectories: string[] = [];
 const runner = new NodeProcessRunner();
+
+class RecordingAdapter implements AgentAdapter {
+  public readonly starts: StartSessionInput[] = [];
+  readonly #delegate = new FakeAgentAdapter();
+
+  public capabilities() { return this.#delegate.capabilities(); }
+  public preflight() { return this.#delegate.preflight(); }
+  public startSession(input: StartSessionInput): Promise<AgentSession> {
+    this.starts.push(input);
+    return this.#delegate.startSession(input);
+  }
+  public send(session: AgentSession, prompt: string): AsyncIterable<AgentEvent> {
+    return this.#delegate.send(session, prompt);
+  }
+  public cancel(session: AgentSession): Promise<void> { return this.#delegate.cancel(session); }
+}
 
 afterEach(() => {
   for (const directory of temporaryDirectories.splice(0)) rmSync(directory, { recursive: true, force: true });
@@ -41,7 +58,8 @@ describe("Dispatcher with deterministic adapter", () => {
         hasPredecessors: false,
       }),
     );
-    const dispatcher = new Dispatcher(repository, new GitWorkspaceManager(), new FakeAgentAdapter());
+    const adapter = new RecordingAdapter();
+    const dispatcher = new Dispatcher(repository, new GitWorkspaceManager(), adapter);
 
     const result = await dispatcher.dispatch({ ticketId: "demo", projectRoot, dirtyPolicy: "cancel" });
 
@@ -56,6 +74,9 @@ describe("Dispatcher with deterministic adapter", () => {
       "READY_TO_MERGE",
     ]);
     expect(repository.history("demo").some((entry) => entry.toStatus === "DONE")).toBe(false);
+    expect(adapter.starts[0]?.additionalWritableDirectories).toHaveLength(4);
+    expect(adapter.starts[1]?.purpose).toBe("review");
+    expect(adapter.starts[1]?.additionalWritableDirectories).toBeUndefined();
     repository.close();
   });
 

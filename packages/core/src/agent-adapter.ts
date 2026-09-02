@@ -26,6 +26,7 @@ export interface AgentSession {
 
 export interface StartSessionInput {
   readonly workspace: string;
+  readonly additionalWritableDirectories?: readonly string[];
   readonly purpose?: "implementation" | "review" | "planning";
   readonly model?: string;
   readonly effort?: string;

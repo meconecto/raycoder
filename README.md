@@ -2,18 +2,18 @@
 
 raycoder is a local, browser-based orchestrator for coding agents. Its engine gives every ticket an isolated Git workspace, records lifecycle and dependency history in SQLite, integrates reviewed work against the current base branch, and recovers conservatively after crashes.
 
-The `1.0.0-rc.1` candidate covers the complete V1 workflow: multi-project runtimes, versioned planning artifacts, confirmed dependency DAGs, isolated ticket workspaces, structured review, journaled integration through `DONE`, crash recovery, project settings, optional Engram memory, bundled skills, and workspace-aware preview.
+The `1.0.0-rc.2` candidate covers the complete V1 workflow: multi-project runtimes, versioned planning artifacts, confirmed dependency DAGs, isolated ticket workspaces, structured review, journaled integration through `DONE`, crash recovery, project settings, optional Engram memory, bundled skills, and workspace-aware preview.
 
 ## Install and run
 
-raycoder is distributed as one npm package and requires Node.js 24 LTS or newer and Git. Until the
-first public release, build a local tarball and exercise exactly what will be published:
+raycoder is distributed as one npm package and requires Node.js 24 LTS or newer and Git. To
+validate a checkout locally, build a tarball and exercise exactly what will be published:
 
 ```bash
 pnpm build
 pnpm --filter raycoder pack --pack-destination ./artifacts
-npx --package ./artifacts/raycoder-1.0.0-rc.1.tgz raycoder --help
-npx --package ./artifacts/raycoder-1.0.0-rc.1.tgz raycoder doctor /path/to/project
+npx --package ./artifacts/raycoder-1.0.0-rc.2.tgz raycoder --help
+npx --package ./artifacts/raycoder-1.0.0-rc.2.tgz raycoder doctor /path/to/project
 ```
 
 `raycoder doctor` checks Node, the bundled Codex runtime, ChatGPT authentication and the
@@ -91,7 +91,7 @@ pnpm dogfood:v1
 
 `release:publish:rc` publishes that tarball under npm's `next` tag. After the exact RC
 artifact is accepted, `release:promote` moves npm's `latest` tag to that same immutable
-version. npm versions cannot be renamed, so this promotes `1.0.0-rc.1` to the stable channel
+version. npm versions cannot be renamed, so this promotes `1.0.0-rc.2` to the stable channel
 without rebuilding it; a separately named `1.0.0` would necessarily be a different package
 artifact.
 

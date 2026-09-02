@@ -100,8 +100,13 @@ export class Dispatcher {
     try {
       const previous = this.#repository.latestAgentSession(ticket.id, "implementation");
       const capabilities = await this.#adapter.capabilities();
+      const additionalWritableDirectories = await this.#workspaces.agentWritableDirectories(
+        metadata.workspace,
+        metadata.branch,
+      );
       session = await this.#adapter.startSession({
         workspace: metadata.workspace,
+        additionalWritableDirectories,
         purpose: "implementation",
         ...(request.model === undefined ? {} : { model: request.model }),
         ...(request.effort === undefined ? {} : { effort: request.effort }),

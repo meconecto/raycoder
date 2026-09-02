@@ -1,6 +1,6 @@
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { DirtyRepositoryError, GitWorkspaceManager, isPathInside } from "../src/git-workspace.js";
 import { NodeProcessRunner } from "../src/process.js";
@@ -53,6 +53,48 @@ describe("GitWorkspaceManager", () => {
     expect(resolve(metadata.workspace)).not.toBe(resolve(repository));
     expect(readFileSync(join(metadata.workspace, "README.md"), "utf8").replace(/\r\n/gu, "\n")).toBe("base\n");
     expect(readFileSync(join(repository, ".git", "info", "exclude"), "utf8")).toContain("/.raycoder/");
+  });
+
+  it("exposes only the Git metadata directories required to commit the ticket branch", async () => {
+    const repository = await createRepository();
+    const manager = new GitWorkspaceManager();
+    const metadata = await manager.create({
+      projectRoot: repository,
+      ticketId: "sandboxed",
+      baseBranch: "main",
+      dirtyPolicy: "cancel",
+    });
+
+    const directories = await manager.agentWritableDirectories(metadata.workspace, metadata.branch);
+    const absolute = async (...args: string[]): Promise<string> => resolve(
+      (await runner.run("git", ["rev-parse", "--path-format=absolute", ...args], { cwd: metadata.workspace })).stdout.trim(),
+    );
+    const worktreeGitDirectory = resolve(
+      (await runner.run("git", ["rev-parse", "--absolute-git-dir"], { cwd: metadata.workspace })).stdout.trim(),
+    );
+    const objects = await absolute("--git-path", "objects");
+    const branchRefs = dirname(await absolute("--git-path", `refs/heads/${metadata.branch}`));
+    const branchLogs = dirname(await absolute("--git-path", `logs/refs/heads/${metadata.branch}`));
+
+    expect(directories).toEqual([worktreeGitDirectory, objects, branchRefs, branchLogs]);
+    expect(directories).not.toContain(resolve(repository, ".git"));
+    expect(directories).not.toContain(resolve(repository));
+  });
+
+  it("rejects Git metadata access when the ticket workspace no longer owns its expected branch", async () => {
+    const repository = await createRepository();
+    const manager = new GitWorkspaceManager();
+    const metadata = await manager.create({
+      projectRoot: repository,
+      ticketId: "detached",
+      baseBranch: "main",
+      dirtyPolicy: "cancel",
+    });
+    await runner.run("git", ["checkout", "--detach"], { cwd: metadata.workspace });
+
+    await expect(manager.agentWritableDirectories(metadata.workspace, metadata.branch)).rejects.toThrow(
+      "expected refs/heads/raycoder/detached",
+    );
   });
 
   it("normalizes a subdirectory and excludes metadata before it is created", async () => {

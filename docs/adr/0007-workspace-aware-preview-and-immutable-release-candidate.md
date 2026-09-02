@@ -26,11 +26,15 @@ operations and the UI renders their output. Preview results never cause ticket t
 verification success or integration.
 
 The single `raycoder` npm package exposes both the CLI and the bundled provider-neutral
-runtime. Release validation packs and installs `1.0.0-rc.1`, imports that installed runtime,
-and drives two dependent tickets through restart and `DONE` in a separate clone. The RC is
+runtime. Release validation packs and installs the version declared by the package, imports
+that installed runtime, and drives two dependent tickets through restart and `DONE` in a separate clone. The RC is
 published under `next`; stable promotion changes the `latest` dist-tag to the already tested
 RC version instead of rebuilding. A later exact `1.0.0` version, if desired, must be produced
 and tested as a distinct immutable artifact.
+
+The first published candidate, `1.0.0-rc.1`, exposed a real-provider sandbox failure when
+committing from a linked worktree. Because npm versions are immutable, the least-privilege
+Git metadata fix is released and revalidated as `1.0.0-rc.2`.
 
 ## Consequences
 
