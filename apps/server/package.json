@@ -9,18 +9,23 @@
   },
   "main": "./dist/cli.js",
   "files": [
-    "dist"
+    "dist/cli.js",
+    "dist/cli.js.map",
+    "dist/README.md",
+    "dist/LICENSE"
   ],
   "scripts": {
-    "build": "tsc -b tsconfig.json",
+    "build": "node ../../scripts/build-package.mjs",
     "dev": "node --watch --enable-source-maps ../../node_modules/tsx/dist/cli.mjs src/cli.ts",
-    "typecheck": "tsc -b tsconfig.json --pretty false",
+    "typecheck": "tsc -p tsconfig.json --noEmit --pretty false",
     "smoke:codex": "node --enable-source-maps dist/smoke-codex.js"
   },
   "dependencies": {
-    "@raycoder/core": "workspace:*"
+    "@openai/codex-sdk": "^0.152.1",
+    "better-sqlite3": "^12.2.0"
   },
   "devDependencies": {
+    "@raycoder/core": "workspace:*",
     "tsx": "^4.20.5"
   },
   "engines": {

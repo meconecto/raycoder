@@ -12,6 +12,7 @@ import {
   NodeProcessRunner,
   PreflightService,
   ProjectOrchestrator,
+  RAYCODER_VERSION,
   RecoveryService,
   TicketRepository,
   type PreflightReport,
@@ -20,22 +21,35 @@ import { createRaycoderServer } from "./server.js";
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
+  if (args[0] === "--help" || args[0] === "-h") {
+    console.log(helpText());
+    return;
+  }
+  if (args[0] === "--version" || args[0] === "-v") {
+    console.log(RAYCODER_VERSION);
+    return;
+  }
   const configStore = new GlobalConfigStore();
   if (args[0] === "config") {
     await handleConfigCommand(configStore, args.slice(1));
     return;
   }
-  const requestedProjectPath = resolve(args[0] ?? process.cwd());
-  const config = await configStore.read();
   const adapter = new CodexAgentAdapter();
   const preflight = await new PreflightService([adapter]).run();
   printPreflight(preflight);
+  if (args[0] === "doctor") {
+    await printProjectDiagnostics(resolve(args[1] ?? process.cwd()));
+    if (!preflight.canStart) process.exitCode = 1;
+    return;
+  }
   if (!preflight.canStart) {
     console.error("raycoder server not started: essential preflight requirements were not met");
     process.exitCode = 1;
     return;
   }
 
+  const requestedProjectPath = resolve(args[0] ?? process.cwd());
+  const config = await configStore.read();
   const runner = new NodeProcessRunner();
   const workspaces = new GitWorkspaceManager(runner);
   const projectRoot = await workspaces.prepareProject(requestedProjectPath);
@@ -84,12 +98,38 @@ async function handleConfigCommand(store: GlobalConfigStore, args: readonly stri
 }
 
 function usageError(): Error {
-  return new Error([
+  return new Error(helpText());
+}
+
+function helpText(): string {
+  return [
+    "raycoder — local coding-agent orchestrator",
+    "",
     "Usage:",
-    "  raycoder [project-directory]",
-    "  raycoder config show",
-    "  raycoder config set integration-mode auto|confirm",
-  ].join("\n"));
+    "  npx raycoder [project-directory]",
+    "  npx raycoder doctor [project-directory]",
+    "  npx raycoder config show",
+    "  npx raycoder config set integration-mode auto|confirm",
+    "  npx raycoder --help | --version",
+  ].join("\n");
+}
+
+async function printProjectDiagnostics(projectPath: string): Promise<void> {
+  const runner = new NodeProcessRunner();
+  try {
+    const root = (await runner.run("git", ["rev-parse", "--show-toplevel"], {
+      cwd: projectPath,
+      timeoutMs: 10_000,
+    })).stdout.trim();
+    const branch = (await runner.run("git", ["symbolic-ref", "--quiet", "--short", "HEAD"], {
+      cwd: root,
+      timeoutMs: 10_000,
+    })).stdout.trim();
+    console.log(`✓ project — Git repository ${root} on ${branch}`);
+  } catch (error) {
+    console.error(`✗ project — ${error instanceof Error ? error.message : String(error)}`);
+    process.exitCode = 1;
+  }
 }
 
 function printPreflight(report: PreflightReport): void {

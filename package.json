@@ -9,6 +9,8 @@
     "build": "pnpm -r build",
     "dev": "pnpm --filter raycoder dev",
     "lint": "eslint . --max-warnings 0",
+    "package:smoke": "node scripts/package-smoke.mjs",
+    "package:npx-smoke": "node scripts/npx-smoke.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "pnpm -r typecheck",
@@ -17,6 +19,7 @@
   "devDependencies": {
     "@eslint/js": "^9.35.0",
     "@types/node": "^24.3.0",
+    "esbuild": "^0.28.2",
     "eslint": "^9.35.0",
     "typescript": "^5.9.2",
     "typescript-eslint": "^8.42.0",

@@ -14,6 +14,9 @@ importers:
       '@types/node':
         specifier: ^24.3.0
         version: 24.13.3
+      esbuild:
+        specifier: ^0.28.2
+        version: 0.28.2
       eslint:
         specifier: ^9.35.0
         version: 9.39.5(supports-color@7.2.0)
@@ -29,10 +32,16 @@ importers:
 
   apps/server:
     dependencies:
+      '@openai/codex-sdk':
+        specifier: ^0.152.1
+        version: 0.152.1
+      better-sqlite3:
+        specifier: ^12.2.0
+        version: 12.11.1
+    devDependencies:
       '@raycoder/core':
         specifier: workspace:*
         version: link:../../packages/core
-    devDependencies:
       tsx:
         specifier: ^4.20.5
         version: 4.23.13

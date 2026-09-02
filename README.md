@@ -4,6 +4,22 @@ raycoder is a local, browser-based orchestrator for coding agents. Its engine gi
 
 The current engine supports the complete ticket path through `DONE`, including conditional verification when the base has moved and optional confirmation before integration. The broader V1 planning and project-management experience is under active development.
 
+## Install and run
+
+raycoder is distributed as one npm package and requires Node.js 20+ and Git. Until the
+first public release, build a local tarball and exercise exactly what will be published:
+
+```bash
+pnpm build
+pnpm --filter raycoder pack --pack-destination ./artifacts
+npx --package ./artifacts/raycoder-0.1.0.tgz raycoder --help
+npx --package ./artifacts/raycoder-0.1.0.tgz raycoder doctor /path/to/project
+```
+
+`raycoder doctor` checks Node, the bundled Codex runtime, ChatGPT authentication and the
+target Git repository without creating project metadata. Start the local application with
+`npx raycoder /path/to/project`.
+
 ## Development
 
 Requirements: Node.js 20+, pnpm, and Git.
@@ -13,6 +29,8 @@ pnpm install
 pnpm build
 pnpm test
 pnpm lint
+pnpm package:smoke
+pnpm package:npx-smoke
 pnpm dev -- /path/to/a/git/repository
 ```
 
