@@ -7,8 +7,10 @@ import {
   Dispatcher,
   FakeAgentAdapter,
   GitWorkspaceManager,
+  IntegrationService,
   NodeProcessRunner,
   TicketRepository,
+  ProjectOrchestrator,
   type PreflightReport,
 } from "@raycoder/core";
 import { createRaycoderServer } from "../src/server.js";
@@ -33,7 +35,7 @@ async function createRepository(): Promise<string> {
 }
 
 describe("minimal server", () => {
-  it("exposes preflight and dispatches the demonstration ticket through the API", async () => {
+  it("exposes preflight and automatically integrates the demonstration ticket", async () => {
     const projectRoot = await createRepository();
     const repository = new TicketRepository(":memory:");
     const preflight: PreflightReport = {
@@ -42,9 +44,11 @@ describe("minimal server", () => {
       providers: [{ provider: "fake", executable: true, diagnostics: [] }],
       upcoming: [],
     };
+    const dispatcher = new Dispatcher(repository, new GitWorkspaceManager(), new FakeAgentAdapter());
+    const integration = new IntegrationService(repository, projectRoot, "auto");
     const server = createRaycoderServer({
       repository,
-      dispatcher: new Dispatcher(repository, new GitWorkspaceManager(), new FakeAgentAdapter()),
+      orchestrator: new ProjectOrchestrator(repository, dispatcher, integration),
       preflight,
       projectRoot,
       baseBranch: "main",
@@ -60,9 +64,60 @@ describe("minimal server", () => {
         body: JSON.stringify({ dirtyPolicy: "cancel" }),
       });
       expect(response.status).toBe(202);
-      await waitFor(() => repository.list()[0]?.status === "READY_TO_MERGE");
-      expect(repository.list()[0]?.status).toBe("READY_TO_MERGE");
+      await waitFor(() => repository.list()[0]?.status === "DONE");
+      expect(repository.list()[0]?.status).toBe("DONE");
+      expect(await (await fetch(`${root}/api/config`)).json()).toEqual({ integrationMode: "auto" });
+      const tickets = await (await fetch(`${root}/api/tickets`)).json() as {
+        tickets: { integrationAttempt: { status: string } }[];
+      };
+      expect(tickets.tickets[0]?.integrationAttempt.status).toBe("INTEGRATED");
       expect(await (await fetch(root)).text()).toContain("raycoder");
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error === undefined ? resolve() : reject(error)));
+      repository.close();
+    }
+  });
+
+  it("confirms a prepared integration through the API", async () => {
+    const projectRoot = await createRepository();
+    const repository = new TicketRepository(":memory:");
+    const preflight: PreflightReport = {
+      canStart: true,
+      essential: [{ name: "node", ok: true, message: "Node test" }],
+      providers: [{ provider: "fake", executable: true, diagnostics: [] }],
+      upcoming: [],
+    };
+    const dispatcher = new Dispatcher(repository, new GitWorkspaceManager(), new FakeAgentAdapter());
+    const integration = new IntegrationService(repository, projectRoot, "confirm");
+    const server = createRaycoderServer({
+      repository,
+      orchestrator: new ProjectOrchestrator(repository, dispatcher, integration),
+      preflight,
+      projectRoot,
+      baseBranch: "main",
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as AddressInfo).port;
+    const root = `http://127.0.0.1:${port}`;
+    try {
+      await fetch(`${root}/api/demo`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ dirtyPolicy: "cancel" }),
+      });
+      await waitFor(() => repository.latestIntegrationAttempt(repository.list()[0]?.id ?? "missing")?.status === "AWAITING_CONFIRMATION");
+      const ticket = repository.list()[0];
+      const attempt = ticket === undefined ? null : repository.latestIntegrationAttempt(ticket.id);
+      if (ticket === undefined || attempt === null) throw new Error("Expected a prepared integration attempt");
+
+      const response = await fetch(`${root}/api/tickets/${encodeURIComponent(ticket.id)}/integration`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "confirm", attemptId: attempt.id }),
+      });
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ kind: "integrated", ticket: { status: "DONE" } });
     } finally {
       await new Promise<void>((resolve, reject) => server.close((error) => error === undefined ? resolve() : reject(error)));
       repository.close();

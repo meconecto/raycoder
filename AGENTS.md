@@ -2,13 +2,13 @@
 
 ## Architecture
 
-- `packages/core`: domain state machine, DAG rules, SQLite repositories and migrations, Git worktrees, provider-neutral adapters, dispatcher, recovery, and preflight.
+- `packages/core`: domain state machine, DAG rules, SQLite repositories and migrations, Git worktrees, provider-neutral adapters, dispatcher, journaled integration, recovery, and preflight.
 - `apps/server`: the `raycoder` CLI, local HTTP API, minimal diagnostic UI, and the explicit real-Codex smoke command.
 - `docs/adr`: architectural decisions with meaningful change cost.
 
 The core owns lifecycle transitions. Adapters only manage provider sessions and emit normalized events. The UI only invokes the API and renders persisted state.
 
-SQLite is the durable source for ticket state and history, but it is never proof that an external process still exists. Git state and provider process liveness are reconciled separately. A ticket workspace is a Git worktree created from the current head of its canonical base branch when dispatch begins.
+SQLite is the durable source for ticket state and history, but it is never proof that an external process still exists. Git state and provider process liveness are reconciled separately. A ticket workspace is a Git worktree created from the current head of its canonical base branch when dispatch begins. Integration is journaled before the canonical base is advanced; only the integration repository operation may persist `DONE`.
 
 ## Commands
 
@@ -27,7 +27,7 @@ The standard test suite must remain offline, deterministic, credential-free, and
 ## Hard boundaries
 
 - Treat `docs/brief.md` as the product contract. Do not edit it to fit an implementation.
-- Do not implement `READY_TO_MERGE -> DONE` until the real session-2 Git integration exists.
+- Do not bypass the integration journal or fabricate `DONE` with a generic lifecycle transition.
 - Do not let adapters or UI code choose or persist ticket lifecycle transitions.
 - Do not let `READY_TO_MERGE` satisfy a dependency; only `DONE` does.
 - Reject dependency cycles in the domain before persistence.

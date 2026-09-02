@@ -21,15 +21,20 @@ export class GitWorkspaceManager {
     this.#runner = runner;
   }
 
+  public async prepareProject(projectPath: string): Promise<string> {
+    const requestedPath = resolve(projectPath);
+    const projectRoot = resolve((await this.#git(requestedPath, ["rev-parse", "--show-toplevel"])).stdout.trim());
+    await this.#excludeMetadata(projectRoot);
+    return projectRoot;
+  }
+
   public async create(input: {
     projectRoot: string;
     ticketId: string;
     baseBranch: string;
     dirtyPolicy: DirtyWorkspacePolicy;
   }): Promise<GitMetadata> {
-    const projectRoot = resolve(input.projectRoot);
-    await this.#git(projectRoot, ["rev-parse", "--show-toplevel"]);
-    await this.#excludeMetadata(projectRoot);
+    const projectRoot = await this.prepareProject(input.projectRoot);
 
     const dirty = (await this.#git(projectRoot, ["status", "--porcelain"])).stdout.trim().length > 0;
     if (dirty && input.dirtyPolicy !== "committed-head") throw new DirtyRepositoryError();

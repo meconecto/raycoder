@@ -35,6 +35,7 @@ describe("ticket lifecycle", () => {
   it("rejects invalid transitions explicitly", () => {
     expect(() => transitionTicket(fixture("READY"), "REVIEW")).toThrow(InvalidTransitionError);
     expect(() => transitionTicket(fixture("READY_TO_MERGE"), "READY")).toThrow(InvalidTransitionError);
+    expect(() => transitionTicket(fixture("READY_TO_MERGE"), "DONE")).toThrow(InvalidTransitionError);
     expect(() => transitionTicket(fixture("DONE"), "READY")).toThrow(InvalidTransitionError);
   });
 

@@ -72,6 +72,38 @@ export const migrations: readonly Migration[] = [
       );
     `,
   },
+  {
+    version: 2,
+    name: "integration_attempts",
+    sql: `
+      CREATE TABLE integration_attempts (
+        id TEXT PRIMARY KEY,
+        ticket_id TEXT NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+        mode TEXT NOT NULL CHECK (mode IN ('auto', 'confirm')),
+        status TEXT NOT NULL CHECK (status IN (
+          'PREPARING', 'AWAITING_CONFIRMATION', 'APPLYING', 'INTEGRATED', 'BLOCKED', 'INTERRUPTED'
+        )),
+        original_base_commit TEXT NOT NULL,
+        observed_base_head TEXT,
+        ticket_head TEXT,
+        target_commit TEXT,
+        reconciliation_workspace TEXT,
+        base_moved INTEGER NOT NULL DEFAULT 0 CHECK (base_moved IN (0, 1)),
+        verification_status TEXT CHECK (verification_status IN ('SKIPPED', 'PASSED', 'FAILED', 'UNAVAILABLE')),
+        verification_commands_json TEXT NOT NULL DEFAULT '[]',
+        verification_output TEXT,
+        diagnostic_code TEXT,
+        diagnostic_detail TEXT,
+        confirmed_at TEXT,
+        started_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        completed_at TEXT
+      );
+
+      CREATE INDEX integration_attempts_ticket_id ON integration_attempts(ticket_id, started_at, id);
+      CREATE INDEX integration_attempts_status ON integration_attempts(status);
+    `,
+  },
 ] as const;
 
 export function migrate(database: Database.Database): void {

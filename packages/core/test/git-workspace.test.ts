@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -53,5 +53,18 @@ describe("GitWorkspaceManager", () => {
     expect(resolve(metadata.workspace)).not.toBe(resolve(repository));
     expect(readFileSync(join(metadata.workspace, "README.md"), "utf8").replace(/\r\n/gu, "\n")).toBe("base\n");
     expect(readFileSync(join(repository, ".git", "info", "exclude"), "utf8")).toContain("/.raycoder/");
+  });
+
+  it("normalizes a subdirectory and excludes metadata before it is created", async () => {
+    const repository = await createRepository();
+    const nested = join(repository, "nested");
+    mkdirSync(nested);
+    const manager = new GitWorkspaceManager();
+
+    expect(await manager.prepareProject(nested)).toBe(resolve(repository));
+    mkdirSync(join(repository, ".raycoder"));
+    writeFileSync(join(repository, ".raycoder", "raycoder.db"), "metadata", "utf8");
+
+    expect((await runner.run("git", ["status", "--porcelain"], { cwd: repository })).stdout).toBe("");
   });
 });

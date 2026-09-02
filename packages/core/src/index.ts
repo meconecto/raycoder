@@ -6,9 +6,13 @@ export * from "./dispatcher.js";
 export * from "./domain.js";
 export * from "./fake-agent-adapter.js";
 export * from "./git-workspace.js";
+export * from "./global-config.js";
+export * from "./integration-service.js";
 export * from "./migrations.js";
 export * from "./preflight.js";
 export * from "./process.js";
+export * from "./project-verifier.js";
+export * from "./project-orchestrator.js";
 export * from "./recovery.js";
 export * from "./ticket-repository.js";
 

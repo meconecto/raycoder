@@ -1,4 +1,5 @@
 import type { Ticket } from "./domain.js";
+import type { IntegrationRecoveryEvidence } from "./integration-service.js";
 import type { TicketRepository } from "./ticket-repository.js";
 
 export interface ProcessObservation {
@@ -25,10 +26,16 @@ export interface RecoveryResult {
 export class RecoveryService {
   readonly #repository: TicketRepository;
   readonly #processes: ProviderProcessReconciler;
+  readonly #integrationEvidence: IntegrationRecoveryEvidence | null;
 
-  public constructor(repository: TicketRepository, processes: ProviderProcessReconciler = new NoopProcessReconciler()) {
+  public constructor(
+    repository: TicketRepository,
+    processes: ProviderProcessReconciler = new NoopProcessReconciler(),
+    integrationEvidence: IntegrationRecoveryEvidence | null = null,
+  ) {
     this.#repository = repository;
     this.#processes = processes;
+    this.#integrationEvidence = integrationEvidence;
   }
 
   public async recoverUncontrolledShutdown(): Promise<RecoveryResult[]> {
@@ -36,12 +43,31 @@ export class RecoveryService {
     const results: RecoveryResult[] = [];
     for (const ticket of uncertain) {
       const process = await this.#processes.inspect(ticket);
-      const interrupted = this.#repository.transition(
+      let recoveredTicket = this.#repository.transition(
         ticket.id,
         "INTERRUPTED",
         "bootstrap_uncontrolled_shutdown",
       );
-      results.push({ ticket: interrupted, process });
+      if (ticket.status === "READY_TO_MERGE") {
+        const attempt = this.#repository.latestIntegrationAttempt(ticket.id);
+        const canInspect = attempt !== null
+          && (attempt.status === "APPLYING" || attempt.status === "INTEGRATED")
+          && this.#integrationEvidence !== null;
+        let integrated = false;
+        if (canInspect) {
+          try {
+            integrated = await this.#integrationEvidence?.isTargetIntegrated(ticket, attempt) ?? false;
+          } catch {
+            integrated = false;
+          }
+        }
+        if (attempt !== null && integrated) {
+          recoveredTicket = this.#repository.recoverCompletedIntegration(attempt.id);
+        } else if (attempt !== null) {
+          this.#repository.interruptIntegrationAttempt(attempt.id);
+        }
+      }
+      results.push({ ticket: recoveredTicket, process });
     }
     return results;
   }

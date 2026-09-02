@@ -25,6 +25,25 @@ export const operationalStatuses = [
 
 export type OperationalStatus = (typeof operationalStatuses)[number];
 
+export const integrationModes = ["auto", "confirm"] as const;
+
+export type IntegrationMode = (typeof integrationModes)[number];
+
+export const integrationAttemptStatuses = [
+  "PREPARING",
+  "AWAITING_CONFIRMATION",
+  "APPLYING",
+  "INTEGRATED",
+  "BLOCKED",
+  "INTERRUPTED",
+] as const;
+
+export type IntegrationAttemptStatus = (typeof integrationAttemptStatuses)[number];
+
+export const verificationStatuses = ["SKIPPED", "PASSED", "FAILED", "UNAVAILABLE"] as const;
+
+export type VerificationStatus = (typeof verificationStatuses)[number];
+
 export interface Ticket {
   readonly id: string;
   readonly title: string;
@@ -71,7 +90,7 @@ const transitionTable: Readonly<Record<TicketStatus, readonly TicketStatus[]>> =
   RUNNING: ["REVIEW", "BLOCKED", "FAILED", "CANCELLED", "INTERRUPTED"],
   REVIEW: ["CHANGES_REQUESTED", "READY_TO_MERGE", "BLOCKED", "FAILED", "CANCELLED", "INTERRUPTED"],
   CHANGES_REQUESTED: ["RUNNING", "BLOCKED", "FAILED", "CANCELLED"],
-  READY_TO_MERGE: ["DONE", "BLOCKED", "CANCELLED", "INTERRUPTED"],
+  READY_TO_MERGE: ["BLOCKED", "CANCELLED", "INTERRUPTED"],
   DONE: [],
   BLOCKED: [],
   FAILED: ["READY", "RUNNING", "CANCELLED"],

@@ -1,12 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import type { Dispatcher, PreflightReport, TicketRepository } from "@raycoder/core";
+import type { PreflightReport, ProjectOrchestrator, TicketRepository } from "@raycoder/core";
 import { createTicket } from "@raycoder/core";
 import { UI_HTML } from "./ui.js";
 
 export interface RaycoderServerOptions {
   readonly repository: TicketRepository;
-  readonly dispatcher: Dispatcher;
+  readonly orchestrator: ProjectOrchestrator;
   readonly preflight: PreflightReport;
   readonly projectRoot: string;
   readonly baseBranch: string;
@@ -37,10 +37,15 @@ async function route(
     sendJson(response, 200, options.preflight);
     return;
   }
+  if (request.method === "GET" && url.pathname === "/api/config") {
+    sendJson(response, 200, { integrationMode: options.orchestrator.integrationMode });
+    return;
+  }
   if (request.method === "GET" && url.pathname === "/api/tickets") {
     sendJson(response, 200, {
       tickets: options.repository.list().map((ticket) => ({
         ...ticket,
+        integrationAttempt: options.repository.latestIntegrationAttempt(ticket.id),
         ...(executionErrors.has(ticket.id) ? { error: executionErrors.get(ticket.id) } : {}),
       })),
     });
@@ -65,10 +70,29 @@ async function route(
       baseBranch: options.baseBranch,
       hasPredecessors: false,
     }));
-    void options.dispatcher.dispatch({ ticketId: id, projectRoot: options.projectRoot, dirtyPolicy }).catch((error: unknown) => {
-      executionErrors.set(id, error instanceof Error ? error.message : String(error));
-    });
+    void options.orchestrator
+      .dispatch({ ticketId: id, projectRoot: options.projectRoot, dirtyPolicy })
+      .catch((error: unknown) => {
+        executionErrors.set(id, error instanceof Error ? error.message : String(error));
+      });
     sendJson(response, 202, { ticket });
+    return;
+  }
+  const integrationMatch = /^\/api\/tickets\/([^/]+)\/integration$/u.exec(url.pathname);
+  if (request.method === "POST" && integrationMatch !== null) {
+    const encodedTicketId = integrationMatch[1];
+    if (encodedTicketId === undefined) throw new Error("Missing ticket id");
+    const ticketId = decodeURIComponent(encodedTicketId);
+    const body = await readJson(request);
+    if (body.action === "confirm" && typeof body.attemptId === "string") {
+      sendJson(response, 200, await options.orchestrator.confirm(body.attemptId, ticketId));
+      return;
+    }
+    if (body.action === "retry") {
+      sendJson(response, 200, await options.orchestrator.retryIntegration(ticketId));
+      return;
+    }
+    sendJson(response, 400, { error: "action must be confirm with an attemptId, or retry" });
     return;
   }
   sendJson(response, 404, { error: "Not found" });

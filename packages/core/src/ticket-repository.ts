@@ -8,9 +8,12 @@ import {
   transitionTicket,
   UnknownTicketError,
   type DependencyEdge,
+  type IntegrationAttemptStatus,
+  type IntegrationMode,
   type OperationalStatus,
   type Ticket,
   type TicketStatus,
+  type VerificationStatus,
 } from "./domain.js";
 import { migrate } from "./migrations.js";
 
@@ -26,6 +29,28 @@ interface TicketRow {
   workspace: string | null;
   created_at: string;
   updated_at: string;
+}
+
+interface IntegrationAttemptRow {
+  id: string;
+  ticket_id: string;
+  mode: IntegrationMode;
+  status: IntegrationAttemptStatus;
+  original_base_commit: string;
+  observed_base_head: string | null;
+  ticket_head: string | null;
+  target_commit: string | null;
+  reconciliation_workspace: string | null;
+  base_moved: number;
+  verification_status: VerificationStatus | null;
+  verification_commands_json: string;
+  verification_output: string | null;
+  diagnostic_code: string | null;
+  diagnostic_detail: string | null;
+  confirmed_at: string | null;
+  started_at: string;
+  updated_at: string;
+  completed_at: string | null;
 }
 
 export interface TicketHistoryEntry {
@@ -52,6 +77,53 @@ export interface PersistedAgentSession {
   readonly status: string;
   readonly createdAt: string;
   readonly updatedAt: string;
+}
+
+export interface IntegrationAttempt {
+  readonly id: string;
+  readonly ticketId: string;
+  readonly mode: IntegrationMode;
+  readonly status: IntegrationAttemptStatus;
+  readonly originalBaseCommit: string;
+  readonly observedBaseHead: string | null;
+  readonly ticketHead: string | null;
+  readonly targetCommit: string | null;
+  readonly reconciliationWorkspace: string | null;
+  readonly baseMoved: boolean;
+  readonly verificationStatus: VerificationStatus | null;
+  readonly verificationCommands: readonly string[];
+  readonly verificationOutput: string | null;
+  readonly diagnosticCode: string | null;
+  readonly diagnosticDetail: string | null;
+  readonly confirmedAt: string | null;
+  readonly startedAt: string;
+  readonly updatedAt: string;
+  readonly completedAt: string | null;
+}
+
+export interface CreateIntegrationAttempt {
+  readonly id: string;
+  readonly ticketId: string;
+  readonly mode: IntegrationMode;
+  readonly originalBaseCommit: string;
+  readonly ticketHead: string;
+  readonly now?: string;
+}
+
+export interface IntegrationAttemptUpdate {
+  readonly status?: IntegrationAttemptStatus;
+  readonly observedBaseHead?: string;
+  readonly ticketHead?: string;
+  readonly targetCommit?: string;
+  readonly reconciliationWorkspace?: string;
+  readonly baseMoved?: boolean;
+  readonly verificationStatus?: VerificationStatus;
+  readonly verificationCommands?: readonly string[];
+  readonly verificationOutput?: string;
+  readonly diagnosticCode?: string;
+  readonly diagnosticDetail?: string;
+  readonly confirmedAt?: string;
+  readonly completedAt?: string;
 }
 
 export class TicketRepository {
@@ -218,6 +290,162 @@ export class TicketRepository {
       .all(sessionId) as { payload_json: string }[]).map((row) => JSON.parse(row.payload_json) as unknown);
   }
 
+  public createIntegrationAttempt(input: CreateIntegrationAttempt): IntegrationAttempt {
+    const ticket = this.get(input.ticketId);
+    if (ticket.status !== "READY_TO_MERGE") {
+      throw new Error(`Ticket ${ticket.id} is ${ticket.status}, not READY_TO_MERGE`);
+    }
+    const now = input.now ?? new Date().toISOString();
+    this.#database.prepare(`INSERT INTO integration_attempts (
+      id, ticket_id, mode, status, original_base_commit, ticket_head, started_at, updated_at
+    ) VALUES (?, ?, ?, 'PREPARING', ?, ?, ?, ?)`).run(
+      input.id,
+      input.ticketId,
+      input.mode,
+      input.originalBaseCommit,
+      input.ticketHead,
+      now,
+      now,
+    );
+    return this.getIntegrationAttempt(input.id);
+  }
+
+  public getIntegrationAttempt(id: string): IntegrationAttempt {
+    const row = this.#database.prepare("SELECT * FROM integration_attempts WHERE id = ?").get(id) as
+      | IntegrationAttemptRow
+      | undefined;
+    if (row === undefined) throw new Error(`Unknown integration attempt: ${id}`);
+    return integrationAttemptFromRow(row);
+  }
+
+  public listIntegrationAttempts(ticketId?: string): IntegrationAttempt[] {
+    const rows = ticketId === undefined
+      ? this.#database.prepare("SELECT * FROM integration_attempts ORDER BY started_at, id").all()
+      : this.#database.prepare(
+          "SELECT * FROM integration_attempts WHERE ticket_id = ? ORDER BY started_at, id",
+        ).all(ticketId);
+    return (rows as IntegrationAttemptRow[]).map(integrationAttemptFromRow);
+  }
+
+  public latestIntegrationAttempt(ticketId: string): IntegrationAttempt | null {
+    const row = this.#database.prepare(
+      "SELECT * FROM integration_attempts WHERE ticket_id = ? ORDER BY started_at DESC, rowid DESC LIMIT 1",
+    ).get(ticketId) as IntegrationAttemptRow | undefined;
+    return row === undefined ? null : integrationAttemptFromRow(row);
+  }
+
+  public updateIntegrationAttempt(
+    id: string,
+    patch: IntegrationAttemptUpdate,
+    now = new Date().toISOString(),
+  ): IntegrationAttempt {
+    const current = this.getIntegrationAttempt(id);
+    this.#database.prepare(`UPDATE integration_attempts SET
+      status = @status,
+      observed_base_head = @observedBaseHead,
+      ticket_head = @ticketHead,
+      target_commit = @targetCommit,
+      reconciliation_workspace = @reconciliationWorkspace,
+      base_moved = @baseMoved,
+      verification_status = @verificationStatus,
+      verification_commands_json = @verificationCommandsJson,
+      verification_output = @verificationOutput,
+      diagnostic_code = @diagnosticCode,
+      diagnostic_detail = @diagnosticDetail,
+      confirmed_at = @confirmedAt,
+      updated_at = @updatedAt,
+      completed_at = @completedAt
+      WHERE id = @id`).run({
+        id,
+        status: patch.status ?? current.status,
+        observedBaseHead: patch.observedBaseHead ?? current.observedBaseHead,
+        ticketHead: patch.ticketHead ?? current.ticketHead,
+        targetCommit: patch.targetCommit ?? current.targetCommit,
+        reconciliationWorkspace: patch.reconciliationWorkspace ?? current.reconciliationWorkspace,
+        baseMoved: (patch.baseMoved ?? current.baseMoved) ? 1 : 0,
+        verificationStatus: patch.verificationStatus ?? current.verificationStatus,
+        verificationCommandsJson: JSON.stringify(patch.verificationCommands ?? current.verificationCommands),
+        verificationOutput: patch.verificationOutput ?? current.verificationOutput,
+        diagnosticCode: patch.diagnosticCode ?? current.diagnosticCode,
+        diagnosticDetail: patch.diagnosticDetail ?? current.diagnosticDetail,
+        confirmedAt: patch.confirmedAt ?? current.confirmedAt,
+        updatedAt: now,
+        completedAt: patch.completedAt ?? current.completedAt,
+      });
+    return this.getIntegrationAttempt(id);
+  }
+
+  public blockIntegration(
+    attemptId: string,
+    diagnosticCode: string,
+    diagnosticDetail: string,
+    now = new Date().toISOString(),
+  ): Ticket {
+    const attempt = this.getIntegrationAttempt(attemptId);
+    const current = this.get(attempt.ticketId);
+    const next = blockTicket(current, now);
+    const transaction = this.#database.transaction(() => {
+      this.#database
+        .prepare("UPDATE tickets SET status = ?, blocked_from = ?, updated_at = ? WHERE id = ?")
+        .run(next.status, next.blockedFrom, next.updatedAt, next.id);
+      this.#recordHistory(next.id, current.status, next.status, diagnosticCode, now);
+      this.#database.prepare(`UPDATE integration_attempts SET status = 'BLOCKED', diagnostic_code = ?,
+        diagnostic_detail = ?, updated_at = ?, completed_at = ? WHERE id = ?`)
+        .run(diagnosticCode, diagnosticDetail, now, now, attemptId);
+    });
+    transaction();
+    return this.get(attempt.ticketId);
+  }
+
+  public completeIntegration(attemptId: string, now = new Date().toISOString()): Ticket {
+    const attempt = this.getIntegrationAttempt(attemptId);
+    if (attempt.status !== "APPLYING") throw new Error(`Integration attempt ${attemptId} is ${attempt.status}, not APPLYING`);
+    const current = this.get(attempt.ticketId);
+    if (current.status !== "READY_TO_MERGE") {
+      throw new Error(`Ticket ${current.id} is ${current.status}, not READY_TO_MERGE`);
+    }
+    const transaction = this.#database.transaction(() => {
+      this.#writeIntegratedTicket(current, "git_integration_completed", now);
+      this.#database.prepare(`UPDATE integration_attempts SET status = 'INTEGRATED', diagnostic_code = NULL,
+        diagnostic_detail = NULL, updated_at = ?, completed_at = ? WHERE id = ?`).run(now, now, attemptId);
+      this.#promoteReadyTickets(now);
+    });
+    transaction();
+    return this.get(attempt.ticketId);
+  }
+
+  public recoverCompletedIntegration(attemptId: string, now = new Date().toISOString()): Ticket {
+    const attempt = this.getIntegrationAttempt(attemptId);
+    if (attempt.status !== "APPLYING" && attempt.status !== "INTEGRATED") {
+      throw new Error(`Integration attempt ${attemptId} cannot be recovered from ${attempt.status}`);
+    }
+    const current = this.get(attempt.ticketId);
+    if (current.status !== "INTERRUPTED") {
+      throw new Error(`Ticket ${current.id} is ${current.status}, not INTERRUPTED`);
+    }
+    const transaction = this.#database.transaction(() => {
+      this.#writeIntegratedTicket(current, "bootstrap_git_integration_recovered", now);
+      this.#database.prepare(`UPDATE integration_attempts SET status = 'INTEGRATED', diagnostic_code = NULL,
+        diagnostic_detail = NULL, updated_at = ?, completed_at = ? WHERE id = ?`).run(now, now, attemptId);
+      this.#promoteReadyTickets(now);
+    });
+    transaction();
+    return this.get(attempt.ticketId);
+  }
+
+  public interruptIntegrationAttempt(attemptId: string, now = new Date().toISOString()): IntegrationAttempt {
+    const attempt = this.getIntegrationAttempt(attemptId);
+    if (attempt.status === "INTEGRATED" || attempt.status === "BLOCKED" || attempt.status === "INTERRUPTED") {
+      return attempt;
+    }
+    return this.updateIntegrationAttempt(attemptId, {
+      status: "INTERRUPTED",
+      diagnosticCode: "bootstrap_uncontrolled_shutdown",
+      diagnosticDetail: "The integration did not have sufficient Git evidence to be completed during recovery.",
+      completedAt: now,
+    }, now);
+  }
+
   public appliedMigrations(): { version: number; name: string }[] {
     return this.#database
       .prepare("SELECT version, name FROM schema_migrations ORDER BY version")
@@ -232,6 +460,30 @@ export class TicketRepository {
       this.#recordHistory(next.id, current.status, next.status, reason, next.updatedAt);
     });
     transaction();
+  }
+
+  #writeIntegratedTicket(current: Ticket, reason: string, now: string): void {
+    this.#database
+      .prepare("UPDATE tickets SET status = 'DONE', blocked_from = NULL, updated_at = ? WHERE id = ?")
+      .run(now, current.id);
+    this.#recordHistory(current.id, current.status, "DONE", reason, now);
+  }
+
+  #promoteReadyTickets(now: string): void {
+    const rows = this.#database.prepare(`SELECT t.* FROM tickets t
+      WHERE t.status = 'QUEUED'
+      AND NOT EXISTS (
+        SELECT 1 FROM ticket_dependencies d
+        JOIN tickets predecessor ON predecessor.id = d.predecessor_id
+        WHERE d.ticket_id = t.id AND predecessor.status <> 'DONE'
+      )
+      ORDER BY t.created_at, t.id`).all() as TicketRow[];
+    for (const row of rows) {
+      this.#database
+        .prepare("UPDATE tickets SET status = 'READY', blocked_from = NULL, updated_at = ? WHERE id = ?")
+        .run(now, row.id);
+      this.#recordHistory(row.id, "QUEUED", "READY", "dependencies_reconciled_after_integration", now);
+    }
   }
 
   #recordHistory(
@@ -261,5 +513,33 @@ function fromRow(row: TicketRow): Ticket {
     workspace: row.workspace,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+  };
+}
+
+function integrationAttemptFromRow(row: IntegrationAttemptRow): IntegrationAttempt {
+  const commands: unknown = JSON.parse(row.verification_commands_json);
+  if (!Array.isArray(commands) || !commands.every((command) => typeof command === "string")) {
+    throw new Error(`Invalid verification command journal for integration attempt ${row.id}`);
+  }
+  return {
+    id: row.id,
+    ticketId: row.ticket_id,
+    mode: row.mode,
+    status: row.status,
+    originalBaseCommit: row.original_base_commit,
+    observedBaseHead: row.observed_base_head,
+    ticketHead: row.ticket_head,
+    targetCommit: row.target_commit,
+    reconciliationWorkspace: row.reconciliation_workspace,
+    baseMoved: row.base_moved === 1,
+    verificationStatus: row.verification_status,
+    verificationCommands: commands as string[],
+    verificationOutput: row.verification_output,
+    diagnosticCode: row.diagnostic_code,
+    diagnosticDetail: row.diagnostic_detail,
+    confirmedAt: row.confirmed_at,
+    startedAt: row.started_at,
+    updatedAt: row.updated_at,
+    completedAt: row.completed_at,
   };
 }
