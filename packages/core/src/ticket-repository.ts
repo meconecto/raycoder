@@ -1,5 +1,6 @@
 import Database from "better-sqlite3";
 import {
+  assertAcyclic,
   blockTicket,
   desiredPendingStatus,
   replaceTicketDependencies,
@@ -66,6 +67,14 @@ export class TicketRepository {
   }
 
   public create(ticket: Ticket, predecessorIds: readonly string[] = []): Ticket {
+    const existingTickets = this.list();
+    assertAcyclic(
+      [...existingTickets.map((candidate) => candidate.id), ticket.id],
+      [
+        ...this.dependencies(),
+        ...[...new Set(predecessorIds)].map((predecessorId) => ({ ticketId: ticket.id, predecessorId })),
+      ],
+    );
     const transaction = this.#database.transaction(() => {
       this.#database
         .prepare(`INSERT INTO tickets (
@@ -76,7 +85,7 @@ export class TicketRepository {
       const insertEdge = this.#database.prepare(
         "INSERT INTO ticket_dependencies (ticket_id, predecessor_id) VALUES (?, ?)",
       );
-      for (const predecessorId of predecessorIds) insertEdge.run(ticket.id, predecessorId);
+      for (const predecessorId of new Set(predecessorIds)) insertEdge.run(ticket.id, predecessorId);
       this.#recordHistory(ticket.id, null, ticket.status, "created", ticket.createdAt);
     });
     transaction();

@@ -1,6 +1,7 @@
 import { access } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { Codex, type ModelReasoningEffort, type Thread, type ThreadEvent } from "@openai/codex-sdk";
 import type { StartSessionInput } from "./agent-adapter.js";
 
@@ -68,8 +69,9 @@ const runtimePackages: Readonly<Record<string, { packageName: string; triple: st
 export async function resolveCodexRuntimePath(): Promise<string> {
   const target = runtimePackages[`${process.platform}-${process.arch}`];
   if (target === undefined) throw new Error(`Codex SDK does not support ${process.platform}-${process.arch}`);
-  const require = createRequire(import.meta.url);
-  const codexPackage = require.resolve("@openai/codex/package.json");
+  const sdkEntry = fileURLToPath(import.meta.resolve("@openai/codex-sdk"));
+  const sdkRequire = createRequire(sdkEntry);
+  const codexPackage = sdkRequire.resolve("@openai/codex/package.json");
   const packageRequire = createRequire(codexPackage);
   const platformPackage = packageRequire.resolve(`${target.packageName}/package.json`);
   const modern = join(dirname(platformPackage), "vendor", target.triple, "bin", target.binary);

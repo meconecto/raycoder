@@ -70,6 +70,13 @@ describe("TicketRepository", () => {
     repository.close();
   });
 
+  it("rejects a cycle during creation in the domain before writing", () => {
+    const repository = new TicketRepository(":memory:");
+    expect(() => repository.create(fixture("self", true), ["self"])).toThrow(DependencyCycleError);
+    expect(repository.list()).toEqual([]);
+    repository.close();
+  });
+
   it("records blocked_from and transition history atomically", () => {
     const repository = new TicketRepository(":memory:");
     repository.create(fixture("ticket"));

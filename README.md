@@ -24,3 +24,7 @@ pnpm smoke:codex
 ```
 
 It creates and uses a disposable Git fixture; it never runs against the raycoder repository.
+
+## License
+
+AGPL-3.0-only.
