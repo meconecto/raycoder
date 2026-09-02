@@ -61,7 +61,7 @@ describe("GitWorkspaceManager", () => {
     mkdirSync(nested);
     const manager = new GitWorkspaceManager();
 
-    expect(await manager.prepareProject(nested)).toBe(realpathSync(resolve(repository)));
+    expect(await manager.prepareProject(nested)).toBe(realpathSync.native(resolve(repository)));
     mkdirSync(join(repository, ".raycoder"));
     writeFileSync(join(repository, ".raycoder", "raycoder.db"), "metadata", "utf8");
 
