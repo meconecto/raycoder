@@ -20,7 +20,7 @@ await build({
   bundle: true,
   platform: "node",
   format: "esm",
-  target: "node20",
+  target: "node24",
   sourcemap: true,
   alias: {
     "@raycoder/core": join(workspaceRoot, "packages", "core", "src", "index.ts"),

@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -61,7 +61,7 @@ describe("GitWorkspaceManager", () => {
     mkdirSync(nested);
     const manager = new GitWorkspaceManager();
 
-    expect(await manager.prepareProject(nested)).toBe(resolve(repository));
+    expect(await manager.prepareProject(nested)).toBe(realpathSync(resolve(repository)));
     mkdirSync(join(repository, ".raycoder"));
     writeFileSync(join(repository, ".raycoder", "raycoder.db"), "metadata", "utf8");
 

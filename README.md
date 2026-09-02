@@ -6,7 +6,7 @@ The `1.0.0-rc.1` candidate covers the complete V1 workflow: multi-project runtim
 
 ## Install and run
 
-raycoder is distributed as one npm package and requires Node.js 20+ and Git. Until the
+raycoder is distributed as one npm package and requires Node.js 24 LTS or newer and Git. Until the
 first public release, build a local tarball and exercise exactly what will be published:
 
 ```bash
@@ -26,7 +26,7 @@ workspace packages.
 
 ## Development
 
-Requirements: Node.js 20+, pnpm, and Git.
+Requirements: Node.js 24 LTS or newer, pnpm, and Git.
 
 ```bash
 pnpm install

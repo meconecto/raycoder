@@ -53,7 +53,7 @@ describe("PreviewManager", () => {
 
   it("detects a Node live-preview command without starting it", async () => {
     const root = await repositoryFixture();
-    writeFileSync(join(root, "package.json"), JSON.stringify({ packageManager: "pnpm@10", scripts: { dev: "vite" } }));
+    writeFileSync(join(root, "package.json"), JSON.stringify({ packageManager: "pnpm@11", scripts: { dev: "vite" } }));
     const repository = new TicketRepository(":memory:");
     expect(await new PreviewManager(repository, root).describe()).toMatchObject({
       mode: "live",

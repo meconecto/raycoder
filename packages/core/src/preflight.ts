@@ -22,7 +22,7 @@ export class PreflightService {
 
   public async run(): Promise<PreflightReport> {
     const major = Number.parseInt(this.#nodeVersion.split(".")[0] ?? "0", 10);
-    const nodeOk = major >= 20;
+    const nodeOk = major >= 24;
     const providers = await Promise.all(this.#adapters.map(async (adapter): Promise<ProviderPreflight> => {
       try {
         return await adapter.preflight();
@@ -45,7 +45,7 @@ export class PreflightService {
       essential: [{
         name: "node",
         ok: nodeOk,
-        message: nodeOk ? `Node ${this.#nodeVersion} detected` : `Node 20+ required; found ${this.#nodeVersion}`,
+        message: nodeOk ? `Node ${this.#nodeVersion} detected` : `Node 24+ required; found ${this.#nodeVersion}`,
       }],
       providers,
       upcoming: ["claude", "cursor-agent", "opencode"],

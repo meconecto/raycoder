@@ -1,5 +1,6 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { realpathSync } from "node:fs";
+import { mkdir, readFile, realpath, writeFile } from "node:fs/promises";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { NodeProcessRunner, type ProcessRunner } from "./process.js";
 import type { GitMetadata } from "./ticket-repository.js";
 
@@ -23,7 +24,7 @@ export class GitWorkspaceManager {
 
   public async prepareProject(projectPath: string): Promise<string> {
     const requestedPath = resolve(projectPath);
-    const projectRoot = resolve((await this.#git(requestedPath, ["rev-parse", "--show-toplevel"])).stdout.trim());
+    const projectRoot = await realpath(resolve((await this.#git(requestedPath, ["rev-parse", "--show-toplevel"])).stdout.trim()));
     await this.#excludeMetadata(projectRoot);
     return projectRoot;
   }
@@ -80,8 +81,24 @@ export class GitWorkspaceManager {
 }
 
 export function isPathInside(parent: string, child: string): boolean {
-  const path = relative(resolve(parent), resolve(child));
+  const path = relative(canonicalPath(parent), canonicalPath(child));
   return path !== "" && !path.startsWith("..") && !isAbsolute(path);
+}
+
+function canonicalPath(input: string): string {
+  let current = resolve(input);
+  const missingSegments: string[] = [];
+  while (true) {
+    try {
+      return resolve(realpathSync.native(current), ...missingSegments.reverse());
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      const parent = dirname(current);
+      if (parent === current) throw error;
+      missingSegments.push(basename(current));
+      current = parent;
+    }
+  }
 }
 
 function sanitizeTicketId(id: string): string {
