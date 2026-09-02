@@ -1,0 +1,40 @@
+# Working on raycoder
+
+## Architecture
+
+- `packages/core`: domain state machine, DAG rules, SQLite repositories and migrations, Git worktrees, provider-neutral adapters, dispatcher, recovery, and preflight.
+- `apps/server`: the `raycoder` CLI, local HTTP API, minimal diagnostic UI, and the explicit real-Codex smoke command.
+- `docs/adr`: architectural decisions with meaningful change cost.
+
+The core owns lifecycle transitions. Adapters only manage provider sessions and emit normalized events. The UI only invokes the API and renders persisted state.
+
+SQLite is the durable source for ticket state and history, but it is never proof that an external process still exists. Git state and provider process liveness are reconciled separately. A ticket workspace is a Git worktree created from the current head of its canonical base branch when dispatch begins.
+
+## Commands
+
+```bash
+pnpm install
+pnpm build
+pnpm typecheck
+pnpm lint
+pnpm test
+pnpm dev -- /path/to/project
+pnpm smoke:codex
+```
+
+The standard test suite must remain offline, deterministic, credential-free, and quota-free. `smoke:codex` is the only real-provider check and must use its disposable fixture.
+
+## Hard boundaries
+
+- Treat `docs/brief.md` as the product contract. Do not edit it to fit an implementation.
+- Do not implement `READY_TO_MERGE -> DONE` until the real session-2 Git integration exists.
+- Do not let adapters or UI code choose or persist ticket lifecycle transitions.
+- Do not let `READY_TO_MERGE` satisfy a dependency; only `DONE` does.
+- Reject dependency cycles in the domain before persistence.
+- Do not edit a user's tracked files or `.gitignore` outside explicit ticket workspaces/integration. Use `.git/info/exclude` for `.raycoder/` metadata.
+- Do not delete failed/interrupted workspaces or branches automatically.
+- Do not add future provider adapters or provider-specific probes prematurely.
+
+## Definition of done
+
+Before handing work off, run install (when dependencies changed), build, typecheck, lint, and all standard tests. Verify that no standard test contacts a provider or needs credentials. For lifecycle changes, cover invalid transitions and recovery. For Git changes, use disposable fixture repositories and assert physical workspace isolation, ancestry, and commit placement.

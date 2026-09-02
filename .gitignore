@@ -1,0 +1,11 @@
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+.raycoder/
+*.db
+*.db-shm
+*.db-wal
+.env
+.env.*
+!.env.example
