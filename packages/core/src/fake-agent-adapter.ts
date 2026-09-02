@@ -14,8 +14,10 @@ import { NodeProcessRunner, type ProcessRunner } from "./process.js";
 
 interface FakeSessionState {
   readonly workspace: string;
+  readonly purpose: "implementation" | "review" | "planning";
   turn: number;
   cancelled: boolean;
+  readonly implementationNumber: number;
 }
 
 export interface FakeAdapterOptions {
@@ -23,12 +25,14 @@ export interface FakeAdapterOptions {
   readonly contents?: string;
   readonly commitMessage?: string;
   readonly failAtTurn?: number;
+  readonly reviewVerdict?: "approved" | "changes_requested";
 }
 
 export class FakeAgentAdapter implements AgentAdapter {
   readonly #sessions = new Map<string, FakeSessionState>();
   readonly #runner: ProcessRunner;
   readonly #options: Required<Omit<FakeAdapterOptions, "failAtTurn">> & Pick<FakeAdapterOptions, "failAtTurn">;
+  #implementationCount = 0;
 
   public constructor(options: FakeAdapterOptions = {}, runner: ProcessRunner = new NodeProcessRunner()) {
     this.#runner = runner;
@@ -36,6 +40,7 @@ export class FakeAgentAdapter implements AgentAdapter {
       fileName: options.fileName ?? "raycoder-demo.txt",
       contents: options.contents ?? "created deterministically by the raycoder fake adapter\n",
       commitMessage: options.commitMessage ?? "test: fake agent change",
+      reviewVerdict: options.reviewVerdict ?? "approved",
       ...(options.failAtTurn === undefined ? {} : { failAtTurn: options.failAtTurn }),
     };
   }
@@ -61,7 +66,15 @@ export class FakeAgentAdapter implements AgentAdapter {
 
   public async startSession(input: StartSessionInput): Promise<AgentSession> {
     const id = randomUUID();
-    this.#sessions.set(id, { workspace: resolve(input.workspace), turn: 0, cancelled: false });
+    const purpose = input.purpose ?? "implementation";
+    const implementationNumber = purpose === "implementation" ? ++this.#implementationCount : this.#implementationCount;
+    this.#sessions.set(id, {
+      workspace: resolve(input.workspace),
+      purpose,
+      turn: 0,
+      cancelled: false,
+      implementationNumber,
+    });
     return { id, provider: "fake", providerSessionId: `fake-${id}` };
   }
 
@@ -84,11 +97,14 @@ export class FakeAgentAdapter implements AgentAdapter {
       return;
     }
 
-    if (state.turn === 0) {
+    if (state.turn === 0 && state.purpose === "implementation") {
       const filePath = resolve(state.workspace, this.#options.fileName);
       if (!isPathInside(state.workspace, filePath)) throw new Error("Fake adapter file escaped its workspace");
       yield { type: "tool_call", timestamp: timestamp(), callId: "fake-write", name: "write_file", input: { path: filePath } };
-      await writeFile(filePath, this.#options.contents, "utf8");
+      const contents = state.implementationNumber === 1
+        ? this.#options.contents
+        : `${this.#options.contents.trimEnd()}\nimplementation ${state.implementationNumber}\n`;
+      await writeFile(filePath, contents, "utf8");
       yield { type: "file_change", timestamp: timestamp(), paths: [filePath], summary: "deterministic fixture change" };
       await this.#runner.run("git", ["add", "--", this.#options.fileName], { cwd: state.workspace });
       const commit = await this.#runner.run("git", ["commit", "-m", this.#options.commitMessage], { cwd: state.workspace });
@@ -101,6 +117,16 @@ export class FakeAgentAdapter implements AgentAdapter {
         output: commit.stdout,
       };
       yield { type: "tool_result", timestamp: timestamp(), callId: "fake-write", success: true, output: join(state.workspace, this.#options.fileName) };
+    }
+
+    if (state.purpose === "review") {
+      yield {
+        type: "review_decision",
+        timestamp: timestamp(),
+        verdict: this.#options.reviewVerdict,
+        summary: this.#options.reviewVerdict === "approved" ? "Deterministic review passed" : "Deterministic review requested changes",
+        findings: this.#options.reviewVerdict === "approved" ? [] : ["Scripted review finding"],
+      };
     }
 
     state.turn += 1;

@@ -1,20 +1,15 @@
 #!/usr/bin/env node
 
-import { mkdir } from "node:fs/promises";
+import { homedir } from "node:os";
 import { resolve, join } from "node:path";
 import {
   CodexAgentAdapter,
-  Dispatcher,
-  GitIntegrationRecoveryEvidence,
-  GitWorkspaceManager,
   GlobalConfigStore,
-  IntegrationService,
   NodeProcessRunner,
   PreflightService,
-  ProjectOrchestrator,
+  ProjectManager,
+  ProjectRegistry,
   RAYCODER_VERSION,
-  RecoveryService,
-  TicketRepository,
   type PreflightReport,
 } from "@raycoder/core";
 import { createRaycoderServer } from "./server.js";
@@ -50,33 +45,29 @@ async function main(): Promise<void> {
 
   const requestedProjectPath = resolve(args[0] ?? process.cwd());
   const config = await configStore.read();
-  const runner = new NodeProcessRunner();
-  const workspaces = new GitWorkspaceManager(runner);
-  const projectRoot = await workspaces.prepareProject(requestedProjectPath);
-  const baseBranch = (await runner.run("git", ["symbolic-ref", "--quiet", "--short", "HEAD"], {
-    cwd: projectRoot,
-    timeoutMs: 10_000,
-  })).stdout.trim();
-  await mkdir(join(projectRoot, ".raycoder"), { recursive: true });
-  const repository = new TicketRepository(join(projectRoot, ".raycoder", "raycoder.db"));
-  const recovered = await new RecoveryService(
-    repository,
-    undefined,
-    new GitIntegrationRecoveryEvidence(projectRoot, runner),
-  ).recoverUncontrolledShutdown();
-  if (recovered.length > 0) console.warn(`Recovered ${recovered.length} uncertain ticket(s) as INTERRUPTED`);
+  const registry = new ProjectRegistry(join(homedir(), ".raycoder", "projects.db"));
+  const projects = new ProjectManager(registry, () => ({
+    adapter: new CodexAgentAdapter(),
+    integrationMode: config.integrationMode,
+  }));
+  const runtime = await projects.register(requestedProjectPath);
+  if (runtime.recovery.length > 0) console.warn(`Recovered ${runtime.recovery.length} uncertain ticket(s) as INTERRUPTED`);
 
-  const dispatcher = new Dispatcher(repository, workspaces, adapter);
-  const integration = new IntegrationService(repository, projectRoot, config.integrationMode, { runner });
-  const orchestrator = new ProjectOrchestrator(repository, dispatcher, integration);
-  const server = createRaycoderServer({ repository, orchestrator, preflight, projectRoot, baseBranch });
+  const server = createRaycoderServer({
+    repository: runtime.repository,
+    orchestrator: runtime.orchestrator,
+    preflight,
+    projectRoot: runtime.projectRoot,
+    baseBranch: runtime.baseBranch,
+    projects,
+  });
   const port = Number.parseInt(process.env.RAYCODER_PORT ?? "4317", 10);
   server.listen(port, "127.0.0.1", () => {
     console.log(`raycoder listening at http://127.0.0.1:${port}`);
   });
   const shutdown = (): void => {
     server.close(() => {
-      repository.close();
+      projects.close();
     });
   };
   process.once("SIGINT", shutdown);

@@ -26,6 +26,7 @@ export interface AgentSession {
 
 export interface StartSessionInput {
   readonly workspace: string;
+  readonly purpose?: "implementation" | "review" | "planning";
   readonly model?: string;
   readonly effort?: string;
   readonly resumeProviderSessionId?: string;
@@ -43,6 +44,7 @@ export type AgentEvent =
   | (EventBase & { readonly type: "command"; readonly command: string; readonly cwd?: string; readonly exitCode?: number; readonly output?: string })
   | (EventBase & { readonly type: "usage"; readonly inputTokens: number; readonly outputTokens: number; readonly cachedInputTokens?: number })
   | (EventBase & { readonly type: "warning"; readonly message: string; readonly code?: string })
+  | (EventBase & { readonly type: "review_decision"; readonly verdict: "approved" | "changes_requested"; readonly summary: string; readonly findings: readonly string[] })
   | (EventBase & { readonly type: "error"; readonly message: string; readonly code?: string; readonly recoverable: boolean })
   | (EventBase & { readonly type: "completed"; readonly success: boolean; readonly summary?: string });
 

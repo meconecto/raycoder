@@ -35,12 +35,13 @@ describe("TicketRepository", () => {
     expect(first.appliedMigrations()).toEqual([
       { version: 1, name: "tickets_history_dependencies" },
       { version: 2, name: "integration_attempts" },
+      { version: 3, name: "operational_observations_and_reviews" },
     ]);
     first.close();
 
     const second = new TicketRepository(path);
     expect(second.get("one").status).toBe("READY");
-    expect(second.appliedMigrations()).toHaveLength(2);
+    expect(second.appliedMigrations()).toHaveLength(3);
     second.close();
   });
 
@@ -62,7 +63,7 @@ describe("TicketRepository", () => {
     const repository = new TicketRepository(path);
     repository.create(fixture("upgraded"));
 
-    expect(repository.appliedMigrations().map((migration) => migration.version)).toEqual([1, 2]);
+    expect(repository.appliedMigrations().map((migration) => migration.version)).toEqual([1, 2, 3]);
     expect(repository.get("upgraded").status).toBe("READY");
     repository.close();
   });

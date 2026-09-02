@@ -6,7 +6,7 @@
 - `apps/server`: the `raycoder` CLI, local HTTP API, minimal diagnostic UI, and the explicit real-Codex smoke command.
 - `docs/adr`: architectural decisions with meaningful change cost.
 
-The core owns lifecycle transitions. Adapters only manage provider sessions and emit normalized events. The UI only invokes the API and renders persisted state.
+The core owns lifecycle transitions. Adapters only manage provider sessions and emit normalized events. The UI only invokes the API and renders persisted state. Each open project owns an independent `ProjectRuntime`; its scheduler is sequential, while different projects may execute in parallel.
 
 SQLite is the durable source for ticket state and history, but it is never proof that an external process still exists. Git state and provider process liveness are reconciled separately. A ticket workspace is a Git worktree created from the current head of its canonical base branch when dispatch begins. Integration is journaled before the canonical base is advanced; only the integration repository operation may persist `DONE`.
 
@@ -18,6 +18,8 @@ pnpm build
 pnpm typecheck
 pnpm lint
 pnpm test
+pnpm package:smoke
+pnpm package:npx-smoke
 pnpm dev -- /path/to/project
 pnpm smoke:codex
 ```
@@ -34,6 +36,7 @@ The standard test suite must remain offline, deterministic, credential-free, and
 - Do not edit a user's tracked files or `.gitignore` outside explicit ticket workspaces/integration. Use `.git/info/exclude` for `.raycoder/` metadata.
 - Do not delete failed/interrupted workspaces or branches automatically.
 - Do not add future provider adapters or provider-specific probes prematurely.
+- Do not bypass a project's scheduler for dispatch, review, integration or ticket recovery actions.
 
 ## Definition of done
 

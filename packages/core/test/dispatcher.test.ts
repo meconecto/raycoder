@@ -74,4 +74,39 @@ describe("Dispatcher with deterministic adapter", () => {
     expect((await dispatcher.dispatch({ ticketId: "failure", projectRoot, dirtyPolicy: "cancel" })).status).toBe("FAILED");
     repository.close();
   });
+
+  it("persists a structured independent review and resumes the same workspace after changes are requested", async () => {
+    const projectRoot = await createRepository();
+    const repository = new TicketRepository(":memory:");
+    repository.create(createTicket({
+      id: "reviewed",
+      title: "Reviewed",
+      description: "test review lifecycle",
+      baseBranch: "main",
+      hasPredecessors: false,
+    }));
+    const changesReviewer = new FakeAgentAdapter({ reviewVerdict: "changes_requested" });
+    const implementation = new FakeAgentAdapter();
+    const first = new Dispatcher(repository, new GitWorkspaceManager(), implementation, changesReviewer);
+
+    const changes = await first.dispatch({ ticketId: "reviewed", projectRoot, dirtyPolicy: "cancel" });
+    expect(changes.status).toBe("CHANGES_REQUESTED");
+    expect(repository.reviewDecisions("reviewed")[0]).toMatchObject({
+      verdict: "changes_requested",
+      findings: ["Scripted review finding"],
+    });
+    const workspace = changes.workspace;
+
+    const resumed = new Dispatcher(repository, new GitWorkspaceManager(), implementation, new FakeAgentAdapter());
+    const approved = await resumed.dispatch({ ticketId: "reviewed", projectRoot, dirtyPolicy: "cancel" });
+    expect(approved.status).toBe("READY_TO_MERGE");
+    expect(approved.workspace).toBe(workspace);
+    expect(repository.listAgentSessions("reviewed").map((session) => session.role)).toEqual([
+      "implementation",
+      "review",
+      "implementation",
+      "review",
+    ]);
+    repository.close();
+  });
 });

@@ -104,6 +104,49 @@ export const migrations: readonly Migration[] = [
       CREATE INDEX integration_attempts_status ON integration_attempts(status);
     `,
   },
+  {
+    version: 3,
+    name: "operational_observations_and_reviews",
+    sql: `
+      ALTER TABLE agent_sessions ADD COLUMN role TEXT NOT NULL DEFAULT 'implementation';
+
+      CREATE TABLE agent_process_observations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL REFERENCES agent_sessions(id) ON DELETE CASCADE,
+        process_alive INTEGER NOT NULL CHECK (process_alive IN (0, 1)),
+        source TEXT NOT NULL,
+        detail TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+
+      CREATE TABLE git_observations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ticket_id TEXT NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+        workspace TEXT NOT NULL,
+        head TEXT,
+        branch TEXT,
+        is_clean INTEGER CHECK (is_clean IN (0, 1)),
+        source TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+
+      CREATE TABLE review_decisions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ticket_id TEXT NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+        session_id TEXT NOT NULL REFERENCES agent_sessions(id) ON DELETE CASCADE,
+        reviewer_provider TEXT NOT NULL,
+        verdict TEXT NOT NULL CHECK (verdict IN ('approved', 'changes_requested')),
+        summary TEXT NOT NULL,
+        findings_json TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+
+      CREATE INDEX agent_sessions_ticket_role ON agent_sessions(ticket_id, role, created_at);
+      CREATE INDEX process_observations_session ON agent_process_observations(session_id, created_at);
+      CREATE INDEX git_observations_ticket ON git_observations(ticket_id, created_at);
+      CREATE INDEX review_decisions_ticket ON review_decisions(ticket_id, created_at);
+    `,
+  },
 ] as const;
 
 export function migrate(database: Database.Database): void {

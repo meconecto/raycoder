@@ -2,7 +2,7 @@
 
 raycoder is a local, browser-based orchestrator for coding agents. Its engine gives every ticket an isolated Git workspace, records lifecycle and dependency history in SQLite, integrates reviewed work against the current base branch, and recovers conservatively after crashes.
 
-The current engine supports the complete ticket path through `DONE`, including conditional verification when the base has moved and optional confirmation before integration. The broader V1 planning and project-management experience is under active development.
+The current engine supports the complete ticket path through `DONE`, including conditional verification when the base has moved, optional confirmation before integration, multiple project runtimes and structured independent review. The broader V1 planning experience is under active development.
 
 ## Install and run
 
@@ -51,6 +51,14 @@ pnpm smoke:codex
 It creates and uses a disposable Git fixture; it never runs against the raycoder repository.
 
 Project metadata lives in `.raycoder/` and is excluded through the repository-local Git exclude file. Global configuration lives in `~/.raycoder/`. Both locations are removed only through an explicit user cleanup.
+
+## Local API
+
+Projects are catalogued globally and opened as independent runtimes. The API is rooted at
+`/api/projects/:projectId/` and exposes tickets, dependencies, history, provider sessions,
+capabilities and lifecycle actions. Mutations are serialized per project; different projects
+can run concurrently. The legacy single-project diagnostic endpoints remain available for
+the initial screen.
 
 ## License
 

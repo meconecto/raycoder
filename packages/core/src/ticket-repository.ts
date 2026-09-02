@@ -75,8 +75,51 @@ export interface PersistedAgentSession {
   readonly provider: string;
   readonly providerSessionId: string | null;
   readonly status: string;
+  readonly role?: "implementation" | "review" | "planning";
   readonly createdAt: string;
   readonly updatedAt: string;
+}
+
+export interface ReviewDecision {
+  readonly id: number;
+  readonly ticketId: string;
+  readonly sessionId: string;
+  readonly reviewerProvider: string;
+  readonly verdict: "approved" | "changes_requested";
+  readonly summary: string;
+  readonly findings: readonly string[];
+  readonly createdAt: string;
+}
+
+export interface GitObservation {
+  readonly id: number;
+  readonly ticketId: string;
+  readonly workspace: string;
+  readonly head: string | null;
+  readonly branch: string | null;
+  readonly isClean: boolean | null;
+  readonly source: string;
+  readonly createdAt: string;
+}
+
+export interface AgentProcessObservation {
+  readonly id: number;
+  readonly sessionId: string;
+  readonly processAlive: boolean;
+  readonly source: string;
+  readonly detail: string;
+  readonly createdAt: string;
+}
+
+interface ReviewDecisionRow {
+  id: number;
+  ticket_id: string;
+  session_id: string;
+  reviewer_provider: string;
+  verdict: "approved" | "changes_requested";
+  summary: string;
+  findings_json: string;
+  created_at: string;
 }
 
 export interface IntegrationAttempt {
@@ -263,8 +306,31 @@ export class TicketRepository {
 
   public createAgentSession(session: PersistedAgentSession): void {
     this.#database.prepare(`INSERT INTO agent_sessions (
-      id, ticket_id, provider, provider_session_id, status, created_at, updated_at
-    ) VALUES (@id, @ticketId, @provider, @providerSessionId, @status, @createdAt, @updatedAt)`).run(session);
+      id, ticket_id, provider, provider_session_id, status, created_at, updated_at, role
+    ) VALUES (@id, @ticketId, @provider, @providerSessionId, @status, @createdAt, @updatedAt, @role)`).run({
+      ...session,
+      role: session.role ?? "implementation",
+    });
+  }
+
+  public listAgentSessions(ticketId: string): PersistedAgentSession[] {
+    return this.#database.prepare(`SELECT id, ticket_id AS ticketId, provider,
+      provider_session_id AS providerSessionId, status, role, created_at AS createdAt,
+      updated_at AS updatedAt FROM agent_sessions WHERE ticket_id = ? ORDER BY created_at, rowid`)
+      .all(ticketId) as PersistedAgentSession[];
+  }
+
+  public latestAgentSession(ticketId: string, role?: "implementation" | "review" | "planning"): PersistedAgentSession | null {
+    const row = role === undefined
+      ? this.#database.prepare(`SELECT id, ticket_id AS ticketId, provider,
+          provider_session_id AS providerSessionId, status, role, created_at AS createdAt,
+          updated_at AS updatedAt FROM agent_sessions WHERE ticket_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1`)
+          .get(ticketId)
+      : this.#database.prepare(`SELECT id, ticket_id AS ticketId, provider,
+          provider_session_id AS providerSessionId, status, role, created_at AS createdAt,
+          updated_at AS updatedAt FROM agent_sessions WHERE ticket_id = ? AND role = ? ORDER BY created_at DESC, rowid DESC LIMIT 1`)
+          .get(ticketId, role);
+    return (row as PersistedAgentSession | undefined) ?? null;
   }
 
   public updateAgentSession(id: string, values: { providerSessionId?: string; status?: string }, now = new Date().toISOString()): void {
@@ -288,6 +354,86 @@ export class TicketRepository {
     return (this.#database
       .prepare("SELECT payload_json FROM agent_events WHERE session_id = ? ORDER BY sequence")
       .all(sessionId) as { payload_json: string }[]).map((row) => JSON.parse(row.payload_json) as unknown);
+  }
+
+  public recordProcessObservation(input: {
+    sessionId: string;
+    processAlive: boolean;
+    source: string;
+    detail: string;
+    createdAt?: string;
+  }): void {
+    this.#database.prepare(`INSERT INTO agent_process_observations
+      (session_id, process_alive, source, detail, created_at) VALUES (?, ?, ?, ?, ?)`)
+      .run(input.sessionId, input.processAlive ? 1 : 0, input.source, input.detail, input.createdAt ?? new Date().toISOString());
+  }
+
+  public processObservations(sessionId: string): AgentProcessObservation[] {
+    const rows = this.#database.prepare(`SELECT id, session_id AS sessionId, process_alive AS processAlive,
+      source, detail, created_at AS createdAt FROM agent_process_observations WHERE session_id = ? ORDER BY id`)
+      .all(sessionId) as (Omit<AgentProcessObservation, "processAlive"> & { processAlive: number })[];
+    return rows.map((row) => ({ ...row, processAlive: row.processAlive === 1 }));
+  }
+
+  public recordGitObservation(input: {
+    ticketId: string;
+    workspace: string;
+    head: string | null;
+    branch: string | null;
+    isClean: boolean | null;
+    source: string;
+    createdAt?: string;
+  }): void {
+    this.get(input.ticketId);
+    this.#database.prepare(`INSERT INTO git_observations
+      (ticket_id, workspace, head, branch, is_clean, source, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+      .run(
+        input.ticketId,
+        input.workspace,
+        input.head,
+        input.branch,
+        input.isClean === null ? null : input.isClean ? 1 : 0,
+        input.source,
+        input.createdAt ?? new Date().toISOString(),
+      );
+  }
+
+  public gitObservations(ticketId: string): GitObservation[] {
+    const rows = this.#database.prepare(`SELECT id, ticket_id AS ticketId, workspace, head, branch,
+      is_clean AS isClean, source, created_at AS createdAt FROM git_observations WHERE ticket_id = ? ORDER BY id`)
+      .all(ticketId) as (Omit<GitObservation, "isClean"> & { isClean: number | null })[];
+    return rows.map((row) => ({ ...row, isClean: row.isClean === null ? null : row.isClean === 1 }));
+  }
+
+  public recordReviewDecision(input: Omit<ReviewDecision, "id" | "createdAt"> & { createdAt?: string }): ReviewDecision {
+    this.get(input.ticketId);
+    const createdAt = input.createdAt ?? new Date().toISOString();
+    const result = this.#database.prepare(`INSERT INTO review_decisions
+      (ticket_id, session_id, reviewer_provider, verdict, summary, findings_json, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)`).run(
+        input.ticketId,
+        input.sessionId,
+        input.reviewerProvider,
+        input.verdict,
+        input.summary,
+        JSON.stringify(input.findings),
+        createdAt,
+      );
+    return this.reviewDecisions(input.ticketId).find((decision) => decision.id === Number(result.lastInsertRowid)) as ReviewDecision;
+  }
+
+  public reviewDecisions(ticketId: string): ReviewDecision[] {
+    return (this.#database.prepare("SELECT * FROM review_decisions WHERE ticket_id = ? ORDER BY id").all(ticketId) as ReviewDecisionRow[])
+      .map((row) => ({
+        id: row.id,
+        ticketId: row.ticket_id,
+        sessionId: row.session_id,
+        reviewerProvider: row.reviewer_provider,
+        verdict: row.verdict,
+        summary: row.summary,
+        findings: parseStringArray(row.findings_json, `review decision ${row.id}`),
+        createdAt: row.created_at,
+      }));
   }
 
   public createIntegrationAttempt(input: CreateIntegrationAttempt): IntegrationAttempt {
@@ -542,4 +688,12 @@ function integrationAttemptFromRow(row: IntegrationAttemptRow): IntegrationAttem
     updatedAt: row.updated_at,
     completedAt: row.completed_at,
   };
+}
+
+function parseStringArray(json: string, label: string): string[] {
+  const value: unknown = JSON.parse(json);
+  if (!Array.isArray(value) || !value.every((item) => typeof item === "string")) {
+    throw new Error(`Invalid string array persisted for ${label}`);
+  }
+  return value as string[];
 }

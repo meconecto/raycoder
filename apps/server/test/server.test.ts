@@ -11,6 +11,8 @@ import {
   NodeProcessRunner,
   TicketRepository,
   ProjectOrchestrator,
+  ProjectManager,
+  ProjectRegistry,
   type PreflightReport,
 } from "@raycoder/core";
 import { createRaycoderServer } from "../src/server.js";
@@ -121,6 +123,70 @@ describe("minimal server", () => {
     } finally {
       await new Promise<void>((resolve, reject) => server.close((error) => error === undefined ? resolve() : reject(error)));
       repository.close();
+    }
+  });
+
+  it("exposes project-scoped ticket, dependency, history, session and action APIs", async () => {
+    const projectRoot = await createRepository();
+    const registryRoot = mkdtempSync(join(tmpdir(), "raycoder-server-registry-"));
+    temporaryDirectories.push(registryRoot);
+    const projects = new ProjectManager(
+      new ProjectRegistry(join(registryRoot, "projects.db")),
+      () => ({ adapter: new FakeAgentAdapter() }),
+    );
+    const runtime = await projects.register(projectRoot);
+    const project = projects.list()[0]?.project;
+    if (project === undefined) throw new Error("Expected registered project");
+    const preflight: PreflightReport = {
+      canStart: true,
+      essential: [{ name: "node", ok: true, message: "Node test" }],
+      providers: [{ provider: "fake", executable: true, diagnostics: [] }],
+      upcoming: [],
+    };
+    const server = createRaycoderServer({
+      repository: runtime.repository,
+      orchestrator: runtime.orchestrator,
+      preflight,
+      projectRoot: runtime.projectRoot,
+      baseBranch: runtime.baseBranch,
+      projects,
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as AddressInfo).port;
+    const root = `http://127.0.0.1:${port}/api/projects/${project.id}`;
+    try {
+      const parentResponse = await fetch(`${root}/tickets`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: "parent", title: "Parent", description: "first" }),
+      });
+      expect(parentResponse.status).toBe(201);
+      const childResponse = await fetch(`${root}/tickets`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: "child", title: "Child", description: "second", predecessorIds: ["parent"] }),
+      });
+      expect(childResponse.status).toBe(201);
+
+      const run = await fetch(`${root}/tickets/parent/actions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "run", dirtyPolicy: "cancel" }),
+      });
+      expect(run.status).toBe(202);
+      expect(runtime.repository.get("parent").status).toBe("DONE");
+      expect(runtime.repository.get("child").status).toBe("READY");
+      expect((await (await fetch(`${root}/dependencies`)).json())).toMatchObject({
+        dependencies: [{ ticketId: "child", predecessorId: "parent" }],
+      });
+      const history = await (await fetch(`${root}/tickets/parent/history`)).json() as { reviews: unknown[] };
+      expect(history.reviews).toHaveLength(1);
+      const sessions = await (await fetch(`${root}/tickets/parent/sessions`)).json() as { sessions: unknown[] };
+      expect(sessions.sessions).toHaveLength(2);
+      expect(await (await fetch(`${root}/capabilities`)).json()).toMatchObject({ provider: "fake" });
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error === undefined ? resolve() : reject(error)));
+      projects.close();
     }
   });
 });

@@ -43,6 +43,15 @@ export class RecoveryService {
     const results: RecoveryResult[] = [];
     for (const ticket of uncertain) {
       const process = await this.#processes.inspect(ticket);
+      const session = this.#repository.latestAgentSession(ticket.id);
+      if (process !== null && session !== null) {
+        this.#repository.recordProcessObservation({
+          sessionId: session.id,
+          processAlive: process.processAlive,
+          source: "bootstrap_recovery",
+          detail: process.detail,
+        });
+      }
       let recoveredTicket = this.#repository.transition(
         ticket.id,
         "INTERRUPTED",
