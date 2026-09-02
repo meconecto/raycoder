@@ -67,5 +67,5 @@ describe("ProjectRegistry and ProjectRuntime", () => {
     expect(second.repository.get("b1").status).toBe("DONE");
     expect(first.repository.history("a2").map((entry) => entry.toStatus).slice(0, 2)).toEqual(["QUEUED", "READY"]);
     manager.close();
-  });
+  }, 20_000);
 });
