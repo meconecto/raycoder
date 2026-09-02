@@ -1,0 +1,29 @@
+{
+  "name": "raycoder",
+  "version": "0.1.0",
+  "description": "A local, recoverable coding-agent orchestrator",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "bin": {
+    "raycoder": "./dist/cli.js"
+  },
+  "main": "./dist/cli.js",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b tsconfig.json",
+    "dev": "node --watch --enable-source-maps ../../node_modules/tsx/dist/cli.mjs src/cli.ts",
+    "typecheck": "tsc -b tsconfig.json --pretty false",
+    "smoke:codex": "node --enable-source-maps dist/smoke-codex.js"
+  },
+  "dependencies": {
+    "@raycoder/core": "workspace:*"
+  },
+  "devDependencies": {
+    "tsx": "^4.20.5"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
