@@ -47,7 +47,10 @@ jobs:
       - run: pnpm build
       - run: pnpm typecheck
       - run: pnpm lint
-      - run: pnpm test
+      - if: runner.os != 'Windows'
+        run: pnpm test
+      - if: runner.os == 'Windows'
+        run: pnpm test --maxWorkers=1
       - run: pnpm package:smoke
       - run: pnpm package:npx-smoke
       - run: pnpm installer:smoke
