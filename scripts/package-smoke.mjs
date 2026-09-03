@@ -38,7 +38,11 @@ try {
     throw new Error("Published package still depends on the private workspace core");
   }
   const runtime = await import(pathToFileURL(join(fixture, "node_modules", "raycoder", "dist", "runtime.js")).href);
-  if (typeof runtime.ProjectRuntime?.open !== "function" || typeof runtime.FakeAgentAdapter !== "function") {
+  if (
+    typeof runtime.ProjectRuntime?.open !== "function"
+    || typeof runtime.FakeAgentAdapter !== "function"
+    || typeof runtime.UserLocalInstaller !== "function"
+  ) {
     throw new Error("Published package does not expose the bundled runtime");
   }
   const pinnedSkills = join(fixture, "node_modules", "raycoder", "dist", "assets", "skills", "mattpocock");
