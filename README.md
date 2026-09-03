@@ -49,8 +49,9 @@ pnpm dev -- config show
 ```
 
 For UI work, `pnpm dev:fixture` starts a disposable repository at
-`http://127.0.0.1:4399`. The application includes project navigation, planning artifacts,
-tickets, the read-only DAG, history, sessions, settings and preview. Preview uses the
+`http://127.0.0.1:4399`. The application includes a durable planning conversation, structured
+SPEC and ticket editors, revision approval, DAG confirmation, project navigation, tickets,
+the read-only DAG, history, sessions, settings and preview. Preview uses the
 selected active ticket's worktree when applicable; otherwise it uses the canonical base.
 Projects without a runnable web script show Git status and recent commits instead. Preview
 is observability only and never changes lifecycle state.
@@ -70,13 +71,17 @@ Project metadata lives in `.raycoder/` and is excluded through the repository-lo
 
 Projects are inspected before mutation, catalogued globally and opened as independent runtimes. The API is rooted at
 `/api/projects/:projectId/` and exposes tickets, dependencies, history, provider sessions,
-capabilities and lifecycle actions. Mutations are serialized per project; different projects
+capabilities and lifecycle actions. Planning generation creates a durable session and returns
+HTTP 202; clients poll the planning snapshot for persisted events, completion or errors.
+Mutations are serialized per project; different projects
 can run concurrently. The legacy single-project diagnostic endpoints remain available for
 the initial screen.
 
-Planning artifacts follow `interrogation → spec → tickets`. Every revision is durable, and
-the ticket DAG is created only after the proposed plan is confirmed and revalidated for
-cycles. A pinned MIT-licensed snapshot of `mattpocock/skills` is copied into each project's
+Planning follows `conversation → approved snapshot → SPEC → tickets`. Every session, message,
+provider event and artifact revision is durable and traceable. Generated stages receive only
+the approved predecessor artifact. The ticket DAG is created only after a specific approved
+plan is confirmed and revalidated for references, cycles and safe replacement. A pinned
+MIT-licensed snapshot of `mattpocock/skills` is copied into each project's
 untracked `.raycoder/skills` directory. Engram is optional; install it separately and run
 `engram setup codex` to expose durable memory over MCP.
 
@@ -89,6 +94,7 @@ V1 flow before publishing:
 pnpm release:artifact
 pnpm package:npx-smoke
 pnpm dogfood:v1
+pnpm dogfood:rc4
 ```
 
 `release:publish:rc` publishes that tarball under npm's `next` tag. After the exact RC

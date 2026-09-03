@@ -193,12 +193,120 @@ function renderOverview() {
 }
 
 function renderPlanning() {
-  const artifacts = state.planning.artifacts;
+  const planning = state.planning || { artifacts: [], messages: [], sessions: [], events: [], providerAvailable: false };
+  const artifacts = planning.artifacts;
+  const approvedInterrogations = artifacts.filter((artifact) => artifact.kind === "interrogation" && artifact.status === "approved");
+  const approvedSpecs = artifacts.filter((artifact) => artifact.kind === "spec" && artifact.status === "approved");
+  const latestSpec = artifacts.filter((artifact) => artifact.kind === "spec").at(-1);
+  const latestTickets = artifacts.filter((artifact) => artifact.kind === "tickets").at(-1);
+  const active = planning.sessions.find((session) => ["idle", "running"].includes(session.status));
+  const interrupted = planning.sessions.filter((session) => session.status === "interrupted");
+  const providerDisabled = planning.providerAvailable ? "" : "disabled";
   content.className = "stack";
-  content.innerHTML = `<p class="muted">Planning remains available even before a repository has its first commit.</p><div class="grid">${artifacts.map((artifact) => `<article class="card"><div class="row"><h3>${esc(artifact.kind)} v${artifact.revision}</h3><span class="status">${esc(artifact.status)}</span></div><pre>${esc(JSON.stringify(artifact.content, null, 2))}</pre>${artifact.status === "draft" ? `<button data-artifact-approve="${esc(artifact.id)}">Approve</button>` : ""}</article>`).join("")}</div>
-    <article class="card"><h3>New planning artifact</h3><select id="artifact-kind"><option value="interrogation">Interrogation</option><option value="spec">Spec</option></select><textarea id="artifact-markdown" placeholder="Confirmed decisions or spec markdown"></textarea><select id="artifact-predecessor"><option value="">No predecessor</option>${artifacts.filter((artifact) => artifact.status === "approved").map((artifact) => `<option value="${esc(artifact.id)}">${esc(artifact.kind)} v${artifact.revision}</option>`).join("")}</select><button id="create-artifact" class="primary">Save revision</button></article>
-    <article class="card"><h3>Propose ticket DAG</h3><p>JSON array with id, title, description and predecessorIds. Nothing executes before confirmation.</p><select id="ticket-spec">${artifacts.filter((artifact) => artifact.kind === "spec" && artifact.status === "approved").map((artifact) => `<option value="${esc(artifact.id)}">spec v${artifact.revision}</option>`).join("")}</select><textarea id="ticket-plan">[{"id":"ticket-1","title":"First slice","description":"End-to-end behavior","predecessorIds":[]}]</textarea><button id="propose-tickets">Validate proposal</button></article>
-    ${artifacts.filter((artifact) => artifact.kind === "tickets" && artifact.status === "draft").map((artifact) => `<article class="card"><h3>Pending DAG confirmation</h3><button class="primary" data-confirm-plan="${esc(artifact.id)}">Confirm and create tickets</button></article>`).join("")}`;
+  content.innerHTML = `
+    <div class="planning-banner ${planning.providerAvailable ? "ready" : "offline"}">
+      <strong>${planning.providerAvailable ? `${esc(state.capabilities?.provider || "Agent")} ready` : "Provider unavailable"}</strong>
+      <span>Planning data and manual editing stay available${state.inspection?.hasBaseCommit ? "." : "; ticket execution waits for the first Git commit."}</span>
+    </div>
+    <div class="planning-layout">
+      <section class="card conversation-panel">
+        <div class="row"><div><p class="kicker">Conversation</p><h2>Shape the work together</h2></div><span class="status">${esc(planning.thread?.status || "not started")}</span></div>
+        <div class="transcript">${planning.messages.filter((message) => message.role !== "system").map((message) => `
+          <div class="message ${esc(message.role)}"><small>${esc(message.role)} · ${new Date(message.createdAt).toLocaleString()}</small><p>${esc(message.content)}</p></div>`).join("") || '<div class="empty compact">Start with the outcome you want. The conversation is stored locally.</div>'}</div>
+        <div class="composer"><textarea id="planning-message" placeholder="Describe the goal, answer a question, or correct an assumption…" ${providerDisabled}></textarea><button id="send-planning-message" class="primary" ${providerDisabled}>Send</button></div>
+      </section>
+      <aside class="card operation-panel">
+        <p class="kicker">Durable operation</p>
+        ${active ? planningOperation(active, planning.events) : '<p class="muted">No generation is running.</p>'}
+        ${interrupted.map((session) => `<div class="interrupted"><strong>${esc(session.stage)} interrupted</strong><small>${esc(session.errorDetail || "The previous runtime stopped.")}</small><button data-planning-resume="${esc(session.id)}" ${providerDisabled}>Resume</button></div>`).join("")}
+        ${!planning.providerAvailable ? '<p class="warning">Generation and resume need an executable provider. Approval, editing and DAG confirmation do not.</p>' : ""}
+      </aside>
+    </div>
+    <div class="planning-actions">
+      <button id="generate-spec" class="primary" ${providerDisabled || active ? "disabled" : ""}>Generate SPEC from conversation</button>
+      <button id="generate-tickets" ${providerDisabled || active || approvedSpecs.length === 0 ? "disabled" : ""}>Generate tickets from approved SPEC</button>
+    </div>
+    <section><div class="row"><div><p class="kicker">Revisions</p><h2>Review before execution</h2></div><small class="muted">Approve a revision, then confirm its DAG separately.</small></div>
+      <div class="artifact-list">${artifacts.map(planningArtifact).join("") || '<div class="empty">No planning artifacts yet.</div>'}</div>
+    </section>
+    <div class="planning-layout editors">
+      <section class="card"><p class="kicker">Structured SPEC editor</p><h3>${latestSpec ? `Edit SPEC v${latestSpec.revision}` : "New SPEC revision"}</h3>
+        <label>Approved conversation snapshot<select id="spec-predecessor">${approvedInterrogations.map((artifact) => `<option value="${esc(artifact.id)}" ${artifact.id === latestSpec?.predecessorArtifactId ? "selected" : ""}>conversation v${artifact.revision}</option>`).join("")}</select></label>
+        <label>Title<input id="spec-title" value="${esc(latestSpec?.content?.title || "")}" placeholder="Specification title"></label>
+        <label>Summary<textarea id="spec-summary" placeholder="Short overview">${esc(latestSpec?.content?.summary || "")}</textarea></label>
+        ${specListField("Goals", "spec-goals", latestSpec?.content?.goals)}
+        ${specListField("Non-goals", "spec-non-goals", latestSpec?.content?.nonGoals)}
+        ${specListField("Requirements", "spec-requirements", latestSpec?.content?.requirements)}
+        ${specListField("Acceptance criteria", "spec-acceptance", latestSpec?.content?.acceptanceCriteria)}
+        ${specListField("Constraints", "spec-constraints", latestSpec?.content?.constraints)}
+        <button id="save-spec" class="primary" ${approvedInterrogations.length === 0 ? "disabled" : ""}>Save as new revision</button>
+      </section>
+      <section class="card"><p class="kicker">Ticket DAG editor</p><div class="row"><h3>${latestTickets ? `Edit ticket plan v${latestTickets.revision}` : "New ticket plan"}</h3><button id="add-plan-ticket">Add row</button></div>
+        <label>Approved SPEC<select id="ticket-spec">${approvedSpecs.map((artifact) => `<option value="${esc(artifact.id)}" ${artifact.id === latestTickets?.predecessorArtifactId ? "selected" : ""}>SPEC v${artifact.revision} · ${esc(artifact.content?.title)}</option>`).join("")}</select></label>
+        <div id="ticket-plan-rows" class="ticket-plan-rows">${(latestTickets?.content?.tickets || [{ id: "", title: "", description: "", predecessorIds: [] }]).map(ticketPlanRow).join("")}</div>
+        <button id="save-ticket-plan" class="primary" ${approvedSpecs.length === 0 ? "disabled" : ""}>Validate and save revision</button>
+      </section>
+    </div>`;
+}
+
+function planningOperation(session, events) {
+  const sessionEvents = events.filter((event) => event.sessionId === session.id);
+  return `<div class="operation-progress"><div class="row"><strong>${esc(session.stage)}</strong><span class="status ${esc(session.status)}">${esc(session.status)}</span></div>
+    <div class="event-list">${sessionEvents.slice(-6).map((event) => `<small><span>${esc(event.type)}</span>${esc(eventSummary(event.payload))}</small>`).join("") || '<small>Queued durably; waiting for the scheduler.</small>'}</div>
+    <button data-planning-cancel="${esc(session.id)}">Cancel</button></div>`;
+}
+
+function eventSummary(payload) {
+  if (payload.type === "assistant_message") return payload.text.slice(0, 100);
+  if (payload.type === "error" || payload.type === "warning") return payload.message;
+  if (payload.type === "completed") return payload.summary || (payload.success ? "completed" : "failed");
+  if (payload.type === "tool_call") return payload.name;
+  return "";
+}
+
+function artifactBadges(artifact) {
+  return `<span class="badge ${esc(artifact.status)}">${esc(artifact.status)}</span>${artifact.confirmedAt ? '<span class="badge confirmed">confirmed</span>' : ""}`;
+}
+
+function planningArtifact(artifact) {
+  const predecessor = artifact.predecessorArtifactId ? ` · from ${esc(artifact.predecessorArtifactId.slice(0, 8))}` : "";
+  let body = "";
+  if (artifact.kind === "interrogation") {
+    const messages = artifact.content?.messages;
+    body = `<p>${esc(Array.isArray(messages) ? `${messages.length} approved transcript messages` : artifact.content?.markdown || "Conversation snapshot")}</p>`;
+  } else if (artifact.kind === "spec") {
+    body = `<h4>${esc(artifact.content?.title)}</h4><p>${esc(artifact.content?.summary)}</p><small>${artifact.content?.requirements?.length || 0} requirements · ${artifact.content?.acceptanceCriteria?.length || 0} acceptance criteria</small>`;
+  } else {
+    body = `<div class="mini-ticket-list">${(artifact.content?.tickets || []).map((ticket) => `<span><strong>${esc(ticket.id)}</strong> ${esc(ticket.title)}${ticket.predecessorIds.length ? ` ← ${ticket.predecessorIds.map(esc).join(", ")}` : ""}</span>`).join("")}</div>`;
+  }
+  return `<article class="card artifact-card"><div class="row"><div><h3>${esc(artifact.kind)} v${artifact.revision}</h3><small class="muted">${esc(artifact.authorRole)}${predecessor}</small></div><div class="badges">${artifactBadges(artifact)}</div></div>${body}<div class="actions">${artifact.status === "draft" ? `<button data-artifact-approve="${esc(artifact.id)}">Approve this revision</button>` : ""}${artifact.kind === "tickets" && artifact.status === "approved" ? `<button class="primary" data-confirm-plan="${esc(artifact.id)}">${artifact.confirmedAt ? "DAG confirmed" : "Confirm DAG and create tickets"}</button>` : ""}</div></article>`;
+}
+
+function specListField(label, id, values) {
+  return `<label>${esc(label)} <small>one per line</small><textarea id="${id}">${esc((values || []).join("\n"))}</textarea></label>`;
+}
+
+function ticketPlanRow(ticket) {
+  return `<div class="ticket-plan-row">
+    <div class="row"><strong>Ticket</strong><button data-remove-plan-ticket title="Remove row">Remove</button></div>
+    <label>ID<input data-plan-id value="${esc(ticket.id)}" placeholder="stable-ticket-id"></label>
+    <label>Title<input data-plan-title value="${esc(ticket.title)}" placeholder="Vertical slice"></label>
+    <label>Description<textarea data-plan-description placeholder="End-to-end outcome">${esc(ticket.description)}</textarea></label>
+    <label>Predecessor IDs <small>comma separated</small><input data-plan-predecessors value="${esc((ticket.predecessorIds || []).join(", "))}" placeholder="ticket-a, ticket-b"></label>
+  </div>`;
+}
+
+function lines(selector) {
+  return $(selector).value.split("\n").map((value) => value.trim()).filter(Boolean);
+}
+
+function readTicketPlanRows() {
+  return [...document.querySelectorAll(".ticket-plan-row")].map((row) => ({
+    id: row.querySelector("[data-plan-id]").value.trim(),
+    title: row.querySelector("[data-plan-title]").value.trim(),
+    description: row.querySelector("[data-plan-description]").value.trim(),
+    predecessorIds: row.querySelector("[data-plan-predecessors]").value.split(",").map((value) => value.trim()).filter(Boolean),
+  }));
 }
 
 function renderTickets() {
@@ -353,10 +461,45 @@ $("#content").addEventListener("click", (event) => {
     return;
   }
   if (target.id === "create-ticket") { void action(() => json(`${base()}/tickets`, mutation({ title: $("#ticket-title").value, description: $("#ticket-description").value, predecessorIds: $("#ticket-predecessors").value.split(",").map((item) => item.trim()).filter(Boolean) }))); return; }
-  if (target.id === "create-artifact") { void action(() => json(`${base()}/planning/artifacts`, mutation({ kind: $("#artifact-kind").value, markdown: $("#artifact-markdown").value, predecessorArtifactId: $("#artifact-predecessor").value || undefined }))); return; }
+  if (target.id === "send-planning-message") { void action(() => json(`${base()}/planning/messages`, mutation({ content: $("#planning-message").value }))); return; }
+  if (target.id === "generate-spec") { void action(() => json(`${base()}/planning/generations`, mutation({ stage: "spec" }))); return; }
+  if (target.id === "generate-tickets") {
+    const approved = state.planning.artifacts.filter((artifact) => artifact.kind === "spec" && artifact.status === "approved").at(-1);
+    void action(() => json(`${base()}/planning/generations`, mutation({ stage: "tickets", predecessorArtifactId: approved?.id })));
+    return;
+  }
+  if (target.dataset.planningCancel) { void action(() => json(`${base()}/planning/sessions/${encodeURIComponent(target.dataset.planningCancel)}/actions`, mutation({ action: "cancel" }))); return; }
+  if (target.dataset.planningResume) { void action(() => json(`${base()}/planning/sessions/${encodeURIComponent(target.dataset.planningResume)}/actions`, mutation({ action: "resume" }))); return; }
   if (target.dataset.artifactApprove) { void action(() => json(`${base()}/planning/artifacts/${encodeURIComponent(target.dataset.artifactApprove)}/actions`, mutation({ action: "approve" }))); return; }
-  if (target.id === "propose-tickets") { void action(() => json(`${base()}/planning/artifacts`, mutation({ kind: "tickets", tickets: JSON.parse($("#ticket-plan").value), predecessorArtifactId: $("#ticket-spec").value }))); return; }
-  if (target.dataset.confirmPlan) { void action(() => json(`${base()}/planning/artifacts/${encodeURIComponent(target.dataset.confirmPlan)}/actions`, mutation({ action: "confirm_tickets" }))); return; }
+  if (target.id === "save-spec") {
+    const previous = state.planning.artifacts.filter((artifact) => artifact.kind === "spec").at(-1);
+    void action(() => json(`${base()}/planning/specs`, mutation({
+      predecessorArtifactId: $("#spec-predecessor").value,
+      replacesArtifactId: previous?.id,
+      content: {
+        title: $("#spec-title").value,
+        summary: $("#spec-summary").value,
+        goals: lines("#spec-goals"),
+        nonGoals: lines("#spec-non-goals"),
+        requirements: lines("#spec-requirements"),
+        acceptanceCriteria: lines("#spec-acceptance"),
+        constraints: lines("#spec-constraints"),
+      },
+    })));
+    return;
+  }
+  if (target.id === "add-plan-ticket") { $("#ticket-plan-rows").insertAdjacentHTML("beforeend", ticketPlanRow({ id: "", title: "", description: "", predecessorIds: [] })); return; }
+  if (target.dataset.removePlanTicket !== undefined) { target.closest(".ticket-plan-row")?.remove(); return; }
+  if (target.id === "save-ticket-plan") {
+    const previous = state.planning.artifacts.filter((artifact) => artifact.kind === "tickets").at(-1);
+    void action(() => json(`${base()}/planning/ticket-plans`, mutation({
+      predecessorArtifactId: $("#ticket-spec").value,
+      replacesArtifactId: previous?.id,
+      tickets: readTicketPlanRows(),
+    })));
+    return;
+  }
+  if (target.dataset.confirmPlan) { void action(() => json(`${base()}/planning/dag/confirm`, mutation({ artifactId: target.dataset.confirmPlan }))); return; }
   if (target.id === "save-settings") { void action(() => json(`${base()}/settings`, mutation({ override: JSON.parse($("#settings-override").value) }))); return; }
   if (target.id === "plan-cleanup") { void action(buildCleanupPlan, false); return; }
   if (target.dataset.preview) { const active = state.tickets.find((ticket) => ["RUNNING", "REVIEW", "CHANGES_REQUESTED", "READY_TO_MERGE"].includes(ticket.status)); void action(() => json(`${base()}/preview`, mutation({ action: target.dataset.preview, ticketId: active?.id }))); }
@@ -396,3 +539,12 @@ void boot();
 setInterval(() => {
   if (state.project && ["overview", "tickets", "dag"].includes(state.tab)) void refreshProject().catch((error) => { errorBox.textContent = error.message; });
 }, 2500);
+
+setInterval(() => {
+  if (!state.project || state.tab !== "planning") return;
+  const editing = content.contains(document.activeElement) && ["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName);
+  void json(`${base()}/planning`).then((planning) => {
+    state.planning = planning;
+    if (!editing) renderPlanning();
+  }).catch((error) => { errorBox.textContent = error.message; });
+}, 1000);
