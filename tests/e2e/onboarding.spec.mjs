@@ -38,7 +38,7 @@ test("first run, onboarding, dirty confirmation and cleanup", async ({ page }) =
     await page.getByRole("button", { name: "Refresh diagnostics" }).click();
     await expect(page.getByText("Ready to execute")).toBeVisible();
     await page.locator("#projects [data-project]").click();
-    await expect(page.getByRole("heading", { name: "new-project" })).toBeVisible();
+    await expect(page.locator("#project-name")).toHaveText("new-project");
 
     await page.getByRole("button", { name: "Planning", exact: true }).click();
     await page.locator("#planning-message").fill("Plan a conversational release slice");
