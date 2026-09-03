@@ -17,18 +17,14 @@ jobs:
   candidate:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/setup@703c52620218391530e48b9e8870d5c0082e1b9b # v2.1.0
         with:
           version: 11.19.0
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-          registry-url: https://registry.npmjs.org
-      - run: pnpm install --frozen-lockfile
+          runtime: node@24
+          require-lockfile: true
       - run: pnpm security:check
       - name: Scan complete history with Gitleaks 8.30.1
         shell: bash
@@ -57,7 +53,7 @@ jobs:
       - run: pnpm package:smoke "${{ env.RAYCODER_TARBALL }}"
       - run: pnpm package:npx-smoke "${{ env.RAYCODER_TARBALL }}"
       - run: pnpm dogfood:v1 "${{ env.RAYCODER_TARBALL }}"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: raycoder-release-candidate
           path: |
@@ -66,8 +62,6 @@ jobs:
           if-no-files-found: error
       - if: ${{ inputs.publish }}
         run: pnpm release:publish:rc
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       - if: ${{ inputs.publish }}
         name: Create GitHub Release from the published artifact
         shell: bash
