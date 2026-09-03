@@ -105,11 +105,26 @@ function spawnNpm(args, cwd, env) {
 }
 
 function npmInvocation(args) {
-  const adjacentCli = join(dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js");
-  if (process.platform === "win32" && existsSync(adjacentCli)) {
-    return { command: process.execPath, args: [adjacentCli, ...args] };
+  if (process.platform === "win32") {
+    const npmCli = windowsNpmCli();
+    if (npmCli !== undefined) return { command: process.execPath, args: [npmCli, ...args] };
+    return { command: process.env.ComSpec ?? "cmd.exe", args: ["/d", "/s", "/c", "npm", ...args] };
   }
   return { command: "npm", args };
+}
+
+function windowsNpmCli() {
+  const candidates = [join(dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js")];
+  try {
+    const commands = execFileSync("where.exe", ["npm.cmd"], { encoding: "utf8" })
+      .split(/\r?\n/u)
+      .map((value) => value.trim())
+      .filter(Boolean);
+    candidates.push(...commands.map((command) => join(dirname(command), "node_modules", "npm", "bin", "npm-cli.js")));
+  } catch {
+    // The cmd.exe fallback below will provide the actionable command error.
+  }
+  return candidates.find((candidate) => existsSync(candidate));
 }
 
 function waitForOutput(child, pattern, timeoutMs) {
