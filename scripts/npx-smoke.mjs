@@ -16,6 +16,10 @@ const environment = {
   USERPROFILE: isolatedHome,
   npm_config_cache: join(isolatedHome, "npm-cache"),
   npm_config_foreground_scripts: "true",
+  npm_config_prefer_offline: "true",
+  npm_config_fetch_retries: "1",
+  npm_config_fetch_retry_mintimeout: "1000",
+  npm_config_fetch_retry_maxtimeout: "5000",
 };
 const suppliedTarball = process.argv[2] === undefined ? undefined : resolve(workspaceRoot, process.argv[2]);
 let serverProcess;
@@ -30,7 +34,7 @@ try {
   if (version !== manifest.version) throw new Error(`Unexpected npx version: ${version}`);
 
   serverProcess = spawnNpm(["exec", "--yes", `--package=${tarball}`, "--", "raycoder", "--no-open", "--port", "0"], fixture, environment);
-  const firstOutput = await waitForOutput(serverProcess, /raycoder listening at (http:\/\/127\.0\.0\.1:\d+\/)/u, 30_000);
+  const firstOutput = await waitForOutput(serverProcess, /raycoder listening at (http:\/\/127\.0\.0\.1:\d+\/)/u, 60_000);
   const url = firstOutput.match(/raycoder listening at (http:\/\/127\.0\.0\.1:\d+\/)/u)?.[1];
   if (url === undefined) throw new Error(`Could not read server URL:\n${firstOutput}`);
 
@@ -65,9 +69,9 @@ try {
       serverProcess.kill();
     }
   }
-  rmSync(fixture, { recursive: true, force: true });
-  rmSync(packageOutput, { recursive: true, force: true });
-  rmSync(isolatedHome, { recursive: true, force: true });
+  rmSync(fixture, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  rmSync(packageOutput, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  rmSync(isolatedHome, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 }
 
 function exec(command, args, cwd) {
@@ -79,18 +83,33 @@ function exec(command, args, cwd) {
 }
 
 function npm(args, cwd, env) {
-  return process.platform === "win32"
-    ? execFileSync(process.env.ComSpec ?? "cmd.exe", ["/d", "/s", "/c", "npm", ...args], { cwd, env, encoding: "utf8" })
-    : execFileSync("npm", args, { cwd, env, encoding: "utf8" });
+  let lastError;
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    try {
+      const invocation = npmInvocation(args);
+      return execFileSync(invocation.command, invocation.args, { cwd, env, encoding: "utf8", timeout: 60_000 });
+    } catch (error) {
+      lastError = error;
+      if (attempt === 1) console.warn("npm exec failed once; retrying with the same isolated cache");
+    }
+  }
+  throw lastError;
 }
 
 function spawnNpm(args, cwd, env) {
-  const child = process.platform === "win32"
-    ? spawn(process.env.ComSpec ?? "cmd.exe", ["/d", "/s", "/c", "npm", ...args], { cwd, env, stdio: ["ignore", "pipe", "pipe"] })
-    : spawn("npm", args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
+  const invocation = npmInvocation(args);
+  const child = spawn(invocation.command, invocation.args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
   child.stdout.setEncoding("utf8");
   child.stderr.setEncoding("utf8");
   return child;
+}
+
+function npmInvocation(args) {
+  const adjacentCli = join(dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js");
+  if (process.platform === "win32" && existsSync(adjacentCli)) {
+    return { command: process.execPath, args: [adjacentCli, ...args] };
+  }
+  return { command: "npm", args };
 }
 
 function waitForOutput(child, pattern, timeoutMs) {
