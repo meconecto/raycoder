@@ -13,6 +13,7 @@
     "package:smoke": "node scripts/package-smoke.mjs",
     "package:npx-smoke": "node scripts/npx-smoke.mjs",
     "dogfood:v1": "node scripts/dogfood-v1.mjs",
+    "dogfood:rc4": "node scripts/dogfood-rc4.mjs",
     "release:artifact": "node scripts/release.mjs artifact",
     "release:publish:rc": "node scripts/release.mjs publish-rc",
     "release:promote": "node scripts/release.mjs promote",

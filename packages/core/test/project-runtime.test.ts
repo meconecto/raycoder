@@ -99,4 +99,27 @@ describe("ProjectRegistry and ProjectRuntime", () => {
     expect(first.repository.history("a2").map((entry) => entry.toStatus).slice(0, 2)).toEqual(["QUEUED", "READY"]);
     manager.close();
   }, 20_000);
+
+  it("marks a prepared planning session interrupted when the project runtime reopens", async () => {
+    const globalRoot = mkdtempSync(join(tmpdir(), "raycoder-planning-recovery-"));
+    temporaryDirectories.push(globalRoot);
+    const manager = new ProjectManager(
+      new ProjectRegistry(join(globalRoot, "projects.db")),
+      () => ({ adapter: new FakeAgentAdapter() }),
+    );
+    const first = await manager.register(await gitFixture("planning-recovery"));
+    const projectId = manager.list()[0]?.project.id;
+    if (projectId === undefined) throw new Error("Expected registered project");
+    const session = await first.planning.prepareMessage("Persist before enqueue");
+    expect(session.status).toBe("idle");
+    manager.closeProject(projectId);
+
+    const reopened = await manager.open(projectId);
+    expect(reopened.planningRecovery).toMatchObject([{ id: session.id, status: "interrupted" }]);
+    expect(reopened.repository.getPlanningSession(session.id)).toMatchObject({
+      status: "interrupted",
+      errorCode: "planning.bootstrap_interrupted",
+    });
+    manager.close();
+  });
 });

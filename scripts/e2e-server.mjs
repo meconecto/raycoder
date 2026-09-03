@@ -1,13 +1,23 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { FakeAgentAdapter, MemoryService, ProjectManager, ProjectRegistry } from "../apps/server/dist/runtime.js";
+import { FakeAgentAdapter, GlobalConfigStore, MemoryService, ProjectManager, ProjectRegistry } from "../apps/server/dist/runtime.js";
 import { createRaycoderServer } from "../apps/server/dist/server.js";
 
 const fixtureRoot = mkdtempSync(join(tmpdir(), "raycoder-e2e-host-"));
+const globalConfig = new GlobalConfigStore(join(fixtureRoot, "config.json"));
+await globalConfig.write({
+  version: 2,
+  integrationMode: "auto",
+  reviewMode: "independent",
+  stages: Object.fromEntries(["planning", "specification", "ticketing", "implementation", "review"].map((stage) => [
+    stage,
+    { provider: "fake", model: "deterministic", effort: null },
+  ])),
+});
 const projects = new ProjectManager(
   new ProjectRegistry(join(fixtureRoot, "projects.db")),
-  () => ({ adapter: new FakeAgentAdapter() }),
+  () => ({ adapter: new FakeAgentAdapter(), globalConfigStore: globalConfig }),
 );
 const memory = new MemoryService({ async run() { throw new Error("Engram intentionally unavailable in E2E"); } }, join(fixtureRoot, "codex.toml"));
 const limited = {

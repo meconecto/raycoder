@@ -37,12 +37,13 @@ describe("TicketRepository", () => {
       { version: 2, name: "integration_attempts" },
       { version: 3, name: "operational_observations_and_reviews" },
       { version: 4, name: "planning_artifacts_threads_and_settings" },
+      { version: 5, name: "conversational_planning_sessions_and_traceability" },
     ]);
     first.close();
 
     const second = new TicketRepository(path);
     expect(second.get("one").status).toBe("READY");
-    expect(second.appliedMigrations()).toHaveLength(4);
+    expect(second.appliedMigrations()).toHaveLength(5);
     second.close();
   });
 
@@ -64,9 +65,52 @@ describe("TicketRepository", () => {
     const repository = new TicketRepository(path);
     repository.create(fixture("upgraded"));
 
-    expect(repository.appliedMigrations().map((migration) => migration.version)).toEqual([1, 2, 3, 4]);
+    expect(repository.appliedMigrations().map((migration) => migration.version)).toEqual([1, 2, 3, 4, 5]);
     expect(repository.get("upgraded").status).toBe("READY");
     repository.close();
+  });
+
+  it("upgrades a real v4 planning database to v5 idempotently without losing history", () => {
+    const directory = mkdtempSync(join(tmpdir(), "raycoder-db-v4-"));
+    temporaryDirectories.push(directory);
+    const path = join(directory, "raycoder.db");
+    const database = new SqliteDatabase(path);
+    database.exec(`CREATE TABLE schema_migrations (
+      version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL
+    );`);
+    for (const migration of migrations.slice(0, 4)) {
+      database.exec(migration.sql);
+      database.prepare("INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)")
+        .run(migration.version, migration.name, "2026-09-02T00:00:00.000Z");
+    }
+    database.prepare(`INSERT INTO planning_threads
+      (id, provider, provider_session_id, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`)
+      .run("thread-v4", "fake", "provider-v4", "completed", "2026-09-02T00:00:00.000Z", "2026-09-02T00:00:01.000Z");
+    database.prepare(`INSERT INTO planning_messages
+      (thread_id, sequence, role, content, created_at) VALUES (?, ?, ?, ?, ?)`)
+      .run("thread-v4", 0, "user", "preserved message", "2026-09-02T00:00:00.000Z");
+    database.prepare(`INSERT INTO planning_artifacts
+      (id, kind, revision, content_json, predecessor_artifact_id, status, created_at, approved_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run("artifact-v4", "interrogation", 1, JSON.stringify({ markdown: "preserved" }), null, "approved",
+        "2026-09-02T00:00:00.000Z", "2026-09-02T00:00:01.000Z");
+    database.close();
+
+    const first = new TicketRepository(path);
+    expect(first.appliedMigrations().map((migration) => migration.version)).toEqual([1, 2, 3, 4, 5]);
+    expect(first.latestPlanningThread()).toMatchObject({ id: "thread-v4", status: "idle" });
+    expect(first.planningMessages("thread-v4")).toMatchObject([{ content: "preserved message", sessionId: null }]);
+    expect(first.getPlanningArtifact("artifact-v4")).toMatchObject({
+      content: { markdown: "preserved" },
+      authorRole: "system",
+      sourceMessageIds: [],
+    });
+    first.close();
+
+    const second = new TicketRepository(path);
+    expect(second.appliedMigrations()).toHaveLength(5);
+    expect(second.listPlanningSessions()).toEqual([]);
+    second.close();
   });
 
   it("persists dependencies and keeps READY_TO_MERGE descendants queued", () => {

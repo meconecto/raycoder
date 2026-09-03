@@ -50,6 +50,8 @@ jobs:
       - run: pnpm test
       - run: pnpm package:smoke
       - run: pnpm package:npx-smoke
+      - run: pnpm dogfood:v1
+      - run: pnpm dogfood:rc4
 
   browser-e2e:
     runs-on: ubuntu-latest

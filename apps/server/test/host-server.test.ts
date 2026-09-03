@@ -118,6 +118,34 @@ describe("projectless application host", () => {
       });
       expect(run.status).toBe(503);
       expect(await run.json()).toMatchObject({ code: "provider.unavailable" });
+
+      const generation = await fetch(`${server.root}/api/projects/${id}/planning/messages`, {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ content: "Use a provider" }),
+      });
+      expect(generation.status).toBe(503);
+      expect(await generation.json()).toMatchObject({
+        code: "provider.unavailable",
+        details: { providers: [{ provider: "fake", executable: false }] },
+      });
+
+      const interrogation = await fetch(`${server.root}/api/projects/${id}/planning/artifacts`, {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ kind: "interrogation", markdown: "Manual decisions" }),
+      }).then((response) => response.json()) as { artifact: { id: string } };
+      await fetch(`${server.root}/api/projects/${id}/planning/artifacts/${interrogation.artifact.id}/actions`, {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "approve" }),
+      });
+      const specResponse = await fetch(`${server.root}/api/projects/${id}/planning/specs`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          predecessorArtifactId: interrogation.artifact.id,
+          content: {
+            title: "Offline SPEC", summary: "Editable without a provider", goals: [], nonGoals: [], requirements: [], acceptanceCriteria: [], constraints: [],
+          },
+        }),
+      });
+      expect(specResponse.status).toBe(201);
+      expect(await specResponse.json()).toMatchObject({ artifact: { kind: "spec", status: "draft" } });
     } finally {
       await server.close();
       fixture.host.close();
