@@ -97,6 +97,24 @@ version. npm versions cannot be renamed, so this promotes `1.0.0-rc.3` to the st
 without rebuilding it; a separately named `1.0.0` would necessarily be a different package
 artifact.
 
+Promotion is deliberately local and interactive. Confirm that `apps/server/package.json`
+still names the accepted, already-published RC, then validate the npm session without exposing
+credentials:
+
+```bash
+npm whoami
+# If the session is missing or expired:
+npm login --auth-type=web
+pnpm release:promote
+pnpm release:verify-tags
+```
+
+Do not print npm configuration, inspect authentication files, pass a token on the command
+line, or copy a token into the repository or CI. npm owns the local web-login session;
+raycoder never reads or stores its credential. `release:promote` first requires `next` to
+point at the manifest version, moves `latest`, and then compares both channels' version,
+integrity and shasum. `release:verify-tags` repeats the final comparison without mutating npm.
+
 ## License
 
 AGPL-3.0-only.

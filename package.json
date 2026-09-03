@@ -16,6 +16,7 @@
     "release:artifact": "node scripts/release.mjs artifact",
     "release:publish:rc": "node scripts/release.mjs publish-rc",
     "release:promote": "node scripts/release.mjs promote",
+    "release:verify-tags": "node scripts/release.mjs verify-tags",
     "security:check": "node scripts/security-check.mjs",
     "test": "vitest run",
     "test:e2e": "pnpm build && playwright test",

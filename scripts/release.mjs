@@ -3,6 +3,11 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  assertExpectedChannel,
+  assertMatchingPublishedChannels,
+  parsePublishedChannel,
+} from "./release-channels.mjs";
 
 const workspaceRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const packageRoot = join(workspaceRoot, "apps", "server");
@@ -28,9 +33,30 @@ if (command === "artifact") {
   exec("npm", ["publish", tarball, "--tag", "next", "--access", "public"], workspaceRoot);
 } else if (command === "promote") {
   if (!/-rc\.\d+$/u.test(manifest.version)) throw new Error(`Expected an RC version, found ${manifest.version}`);
+  assertExpectedChannel(readPublishedChannel("next"), manifest.version);
   exec("npm", ["dist-tag", "add", `${manifest.name}@${manifest.version}`, "latest"], workspaceRoot);
+  verifyPublishedChannels();
+} else if (command === "verify-tags") {
+  verifyPublishedChannels();
 } else {
-  throw new Error("Usage: node scripts/release.mjs artifact|publish-rc|promote");
+  throw new Error("Usage: node scripts/release.mjs artifact|publish-rc|promote|verify-tags");
+}
+
+function verifyPublishedChannels() {
+  const verified = assertMatchingPublishedChannels(
+    [readPublishedChannel("latest"), readPublishedChannel("next")],
+    manifest.version,
+  );
+  console.log(`Verified npm latest and next at ${verified.version} (${verified.integrity}; ${verified.shasum})`);
+}
+
+function readPublishedChannel(tag) {
+  const output = execOutput(
+    "npm",
+    ["view", `${manifest.name}@${tag}`, "version", "dist.integrity", "dist.shasum", "--json"],
+    workspaceRoot,
+  );
+  return parsePublishedChannel(tag, output);
 }
 
 function verifyChecksum() {
@@ -46,4 +72,12 @@ function exec(executable, args, cwd) {
     return;
   }
   execFileSync(executable, args, { cwd, stdio: "inherit" });
+}
+
+function execOutput(executable, args, cwd) {
+  const options = { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] };
+  if (process.platform === "win32" && (executable === "pnpm" || executable === "npm")) {
+    return execFileSync(process.env.ComSpec ?? "cmd.exe", ["/d", "/s", "/c", executable, ...args], options);
+  }
+  return execFileSync(executable, args, options);
 }
