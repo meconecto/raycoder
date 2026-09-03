@@ -59,7 +59,7 @@ jobs:
         with:
           version: 11.19.0
           runtime: node@24
-          cache: true
+          cache: false
           require-lockfile: true
       - run: pnpm exec playwright install --with-deps chromium
       - run: pnpm test:e2e
