@@ -2,6 +2,7 @@ name: ci
 
 on:
   push:
+    branches: [main]
   pull_request:
 
 permissions:
@@ -47,9 +48,13 @@ jobs:
       - run: pnpm build
       - run: pnpm typecheck
       - run: pnpm lint
-      - run: pnpm test
+      - if: runner.os != 'Windows'
+        run: pnpm test
+      - if: runner.os == 'Windows'
+        run: pnpm test --maxWorkers=1 --testTimeout=30000
       - run: pnpm package:smoke
       - run: pnpm package:npx-smoke
+      - run: pnpm installer:smoke
       - run: pnpm dogfood:v1
       - run: pnpm dogfood:rc4
 

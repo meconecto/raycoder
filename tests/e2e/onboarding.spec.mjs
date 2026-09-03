@@ -24,7 +24,7 @@ test("first run, onboarding, dirty confirmation and cleanup", async ({ page }) =
     await expect(page.locator("#inspection")).toContainText("missing");
     await expect(page.locator("#inspection")).toContainText("empty root commit");
     await page.locator("#save-project").click();
-    await expect(page.getByRole("heading", { name: "new-project" })).toBeVisible();
+    await expect(page.locator("#project-name")).toHaveText("new-project");
     await expect(page.getByText(/main · [a-f0-9]{10} · clean/u)).toBeVisible();
     expect(execFileSync("git", ["log", "-1", "--format=%an <%ae>|%s"], { cwd: project, encoding: "utf8" }).trim())
       .toBe("raycoder <raycoder@local.invalid>|chore: initialize raycoder project");
@@ -38,7 +38,7 @@ test("first run, onboarding, dirty confirmation and cleanup", async ({ page }) =
     await page.getByRole("button", { name: "Refresh diagnostics" }).click();
     await expect(page.getByText("Ready to execute")).toBeVisible();
     await page.locator("#projects [data-project]").click();
-    await expect(page.getByRole("heading", { name: "new-project" })).toBeVisible();
+    await expect(page.locator("#project-name")).toHaveText("new-project");
 
     await page.getByRole("button", { name: "Planning", exact: true }).click();
     await page.locator("#planning-message").fill("Plan a conversational release slice");

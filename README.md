@@ -6,15 +6,32 @@ The `1.0.0-rc.3` candidate adds a projectless application host, single-instance 
 
 ## Install and run
 
-raycoder is distributed as one npm package and requires Node.js 24 LTS or newer. Git is
-required when a project is opened or created, but the selector can start without it:
+raycoder is distributed as one npm package and requires Node.js 24 LTS or newer. The
+recommended setup installs a stable user-local launcher without administrator privileges or
+`npm -g`:
+
+```bash
+npx raycoder@latest install
+raycoder
+raycoder /path/to/project --port 4317 --no-open
+raycoder doctor /path/to/project
+```
+
+Use `npx raycoder@<exact-version> install` for a prerelease or reproducible installation, and
+add `--no-shortcut` if no Start menu, `~/Applications`, or Linux desktop entry should be
+created. The public launcher stays in `~/.raycoder/bin`; internally, `raycoder update` keeps
+the active and previous versions, and `raycoder rollback` swaps them atomically. Run
+`raycoder uninstall` to review the exact removal inventory and confirm it. Configuration,
+the project registry, project metadata, and credentials are preserved.
+
+The zero-install form remains available:
 
 ```bash
 npx raycoder@next
-npx raycoder@next /path/to/project --port 4317 --no-open
-npx raycoder@next doctor /path/to/project
-npx raycoder@next cleanup --global
+npx raycoder@next /path/to/project
 ```
+
+Git is required when a project is opened or created, but the selector can start without it.
 
 `raycoder doctor` checks Node, the bundled Codex runtime, ChatGPT authentication and the
 optional Engram MCP setup, and an optional target path without creating project metadata. With
@@ -37,7 +54,9 @@ pnpm lint
 pnpm test:e2e
 pnpm package:smoke
 pnpm package:npx-smoke
+pnpm installer:smoke
 pnpm dogfood:v1
+pnpm dogfood:rc4
 pnpm dev -- /path/to/a/git/repository
 ```
 
@@ -93,6 +112,7 @@ V1 flow before publishing:
 ```bash
 pnpm release:artifact
 pnpm package:npx-smoke
+pnpm installer:smoke
 pnpm dogfood:v1
 pnpm dogfood:rc4
 ```

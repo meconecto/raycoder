@@ -1,4 +1,4 @@
-# raycoder — brief v18 (planificación conversacional)
+# raycoder — brief v19 (instalación user-local actualizable)
 
 ## Qué es esto
 
@@ -31,15 +31,38 @@ Servidor local que se levanta con un comando de terminal, se usa desde el navega
 
 **pnpm** — para el desarrollo de raycoder mismo. No es requisito para el usuario final que corre `npx raycoder`.
 
-## Cómo se corre: `npx raycoder`
+## Cómo se instala y corre
 
-Sin instalación global persistente — única vía de ejecución. Por defecto resuelve la versión publicada según el comportamiento estándar de npm. La integridad del paquete la cubre el mecanismo estándar de npm.
+`npx` sigue siendo la vía cero-instalación y el bootstrap del instalador user-local. La entrada
+pública recomendada para una versión estable es `npx raycoder@latest install`; una prerelease o
+reproducción exacta usa `npx raycoder@<versión-exacta> install`. No se usa `npm -g`, no se
+requieren privilegios de administrador y no se descargan ni ejecutan scripts remotos fuera del
+paquete resuelto por npm.
 
 ```text
+npx raycoder@latest install [--no-shortcut]
+npx raycoder@<versión-exacta> install [--no-shortcut]
+raycoder update
+raycoder rollback
+raycoder uninstall
+
 npx raycoder [project-directory] [--port <0-65535>] [--no-open]
 npx raycoder doctor [project-directory]
 npx raycoder cleanup --global
 ```
+
+La instalación persistente mantiene un launcher público estable en `~/.raycoder/bin` y el mismo
+comando `raycoder` después de cada actualización. Los runtimes se guardan internamente por
+versión. Un puntero `current` se reemplaza de forma atómica sólo después de instalar en staging y
+validar `raycoder --version`; nunca se sobrescribe un runtime que pueda estar ejecutándose. Tras
+una activación exitosa se conservan únicamente la versión activa y la anterior, que sirve para
+`rollback`.
+
+El instalador agrega el launcher al entorno de usuario sin elevar privilegios y crea por defecto
+un acceso apropiado para la plataforma: menú Inicio en Windows, `~/Applications` en macOS y una
+entrada `.desktop` de usuario en Linux. `--no-shortcut` omite ese acceso. Si hay una instancia
+raycoder activa, `update`, `rollback` y `uninstall` se rehúsan a operar con un diagnóstico; el
+usuario debe cerrar la aplicación primero.
 
 Una sola instancia global administra varios proyectos. Sin ruta se abre el selector sin elegir ni abrir automáticamente ninguno; con ruta se abre el repo válido o se precarga el wizard. El puerto se resuelve como `--port` → `RAYCODER_PORT` → `4317`: un puerto explícito ocupado falla, mientras que el default ocupado cae a uno libre del sistema. Una segunda invocación compatible reutiliza la instancia viva; una versión distinta informa su URL y requiere cerrarla sin matar el proceso. La URL siempre se imprime y `--no-open` desactiva el navegador.
 
@@ -61,9 +84,16 @@ Corre en cada arranque, no toca nada, solo informa:
 
 La incorporación de proveedores es **incremental**. La primera build implementa únicamente Codex. La arquitectura debe permitir llegar después a cuatro o cinco conexiones sin modificar el contrato del core, pero el número y la identidad final de esos proveedores no son una invariante de esta etapa.
 
-## Desinstalación: clara
+## Desinstalación: clara y conservadora
 
-Sin instalación global persistente, "desinstalar" en el sentido tradicional no aplica. `~/.raycoder/` y los `.raycoder/` de cada proyecto quedan como limpieza opcional y explícita, nunca automática.
+`raycoder uninstall` muestra un inventario exacto y exige confirmación interactiva. Elimina sólo
+launchers, runtimes versionados, puntero de activación, metadata propia del instalador, acceso de
+usuario y el fragmento de PATH que raycoder haya agregado. Preserva configuración, registro de
+proyectos y toda metadata `.raycoder/` local de los proyectos. Nunca lee, inventaría ni copia
+credenciales del proveedor. La desinstalación se rehúsa mientras exista una instancia activa.
+
+Los datos preservados en `~/.raycoder/` y los `.raycoder/` de cada proyecto se eliminan únicamente
+mediante los flujos de cleanup ya existentes, separados del desinstalador.
 
 La limpieza de un proyecto parte de un inventario con fingerprint y vencimiento, requiere la frase exacta `DELETE <project-name>` y se niega mientras haya scheduler o preview activos. Worktrees dirty, tickets `FAILED`/`INTERRUPTED` y branches no integradas quedan deseleccionados y exigen `force`. Nunca se elimina el checkout principal ni rutas fuera de `.raycoder/workspaces` o `.raycoder/integrations`. El cleanup global exige TTY y `DELETE GLOBAL RAYCODER DATA`, rehúsa operar con una instancia viva y solo borra archivos globales conocidos.
 
@@ -280,7 +310,9 @@ Los proyectos registrados exponen `closed`, `opening`, `open` y `error`. Un path
 
 ## Caso especial: raycoder editándose a sí mismo
 
-Copia de código fuente separada de la instalación activa. Cambios instalados de forma manual — build + reinstalación.
+Copia de código fuente separada de la instalación activa. Una versión nueva se prepara y valida
+fuera del runtime activo y sólo después cambia el puntero estable; desarrollar raycoder nunca
+reescribe la versión que está corriendo.
 
 ## Estructura de conversaciones: no es un chat único por proyecto
 
@@ -341,4 +373,4 @@ Los proveedores siguientes usan un SDK oficial cuando exista y cubra el contrato
 
 **Invariantes técnicas pendientes de definición: ninguna conocida.**
 
-Los mecanismos concretos quedan a criterio de implementación, salvo donde el brief los fija expresamente: el conjunto completo de estados del ticket definido en "Lifecycle y recovery del ticket" y la semántica de `BLOCKED`/`FAILED`/`INTERRUPTED`; desbloqueo del DAG únicamente por `DONE`; ancestry desde el head de la `base_branch` (sin stacked branches); workspace físicamente aislado por ticket; tracking de `base_commit`; verificación condicional a que la base se haya movido; contrato normalizado de eventos; capability discovery; invariante de no-ciclos; preflight parcial no bloqueante; y no modificar archivos versionados del usuario.
+Los mecanismos concretos quedan a criterio de implementación, salvo donde el brief los fija expresamente: el conjunto completo de estados del ticket definido en "Lifecycle y recovery del ticket" y la semántica de `BLOCKED`/`FAILED`/`INTERRUPTED`; desbloqueo del DAG únicamente por `DONE`; ancestry desde el head de la `base_branch` (sin stacked branches); workspace físicamente aislado por ticket; tracking de `base_commit`; verificación condicional a que la base se haya movido; contrato normalizado de eventos; capability discovery; invariante de no-ciclos; preflight parcial no bloqueante; launcher user-local estable con activación atómica y sólo current/previous; preservación de datos y credenciales durante uninstall; y no modificar archivos versionados del usuario.

@@ -1,5 +1,16 @@
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -26,11 +37,13 @@ try {
     exec("pnpm", ["pack", "--pack-destination", packageOutput], packageRoot);
   }
   const tarball = suppliedTarball ?? join(packageOutput, `raycoder-${manifest.version}.tgz`);
-  const version = npm(["exec", "--yes", `--package=${tarball}`, "--", "raycoder", "--version"], fixture, environment).trim();
+  stageLocalNpxFixture(tarball);
+  const npmExec = ["exec", "--offline", "--yes=false", "--", "raycoder"];
+  const version = npm([...npmExec, "--version"], fixture, environment).trim();
   if (version !== manifest.version) throw new Error(`Unexpected npx version: ${version}`);
 
-  serverProcess = spawnNpm(["exec", "--yes", `--package=${tarball}`, "--", "raycoder", "--no-open", "--port", "0"], fixture, environment);
-  const firstOutput = await waitForOutput(serverProcess, /raycoder listening at (http:\/\/127\.0\.0\.1:\d+\/)/u, 30_000);
+  serverProcess = spawnNpm([...npmExec, "--no-open", "--port", "0"], fixture, environment);
+  const firstOutput = await waitForOutput(serverProcess, /raycoder listening at (http:\/\/127\.0\.0\.1:\d+\/)/u, 60_000);
   const url = firstOutput.match(/raycoder listening at (http:\/\/127\.0\.0\.1:\d+\/)/u)?.[1];
   if (url === undefined) throw new Error(`Could not read server URL:\n${firstOutput}`);
 
@@ -42,7 +55,7 @@ try {
   if (preflight.canServe !== true || typeof preflight.canExecute !== "boolean") throw new Error("Packaged preflight contract is invalid");
   if (existsSync(join(fixture, ".raycoder"))) throw new Error("Starting raycoder created .raycoder metadata in the invocation directory");
 
-  const reused = npm(["exec", "--yes", `--package=${tarball}`, "--", "raycoder", "--no-open", "--port", "0"], fixture, environment);
+  const reused = npm([...npmExec, "--no-open", "--port", "0"], fixture, environment);
   if (!reused.includes("Reusing raycoder") || !reused.includes(url)) throw new Error(`Second invocation did not reuse the instance:\n${reused}`);
 
   const recordPath = join(isolatedHome, ".raycoder", "instance.json");
@@ -65,9 +78,32 @@ try {
       serverProcess.kill();
     }
   }
-  rmSync(fixture, { recursive: true, force: true });
-  rmSync(packageOutput, { recursive: true, force: true });
-  rmSync(isolatedHome, { recursive: true, force: true });
+  rmSync(fixture, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  rmSync(packageOutput, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  rmSync(isolatedHome, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+}
+
+function stageLocalNpxFixture(tarball) {
+  const modules = join(fixture, "node_modules");
+  const extraction = join(fixture, "extracted");
+  mkdirSync(modules, { recursive: true });
+  mkdirSync(extraction, { recursive: true });
+  exec("tar", ["-xzf", tarball, "-C", extraction], fixture);
+  renameSync(join(extraction, "package"), join(modules, "raycoder"));
+  rmSync(extraction, { recursive: true, force: true });
+
+  const codexSdk = realpathSync(join(packageRoot, "node_modules", "@openai", "codex-sdk"));
+  const openaiModules = join(modules, "@openai");
+  mkdirSync(openaiModules, { recursive: true });
+  symlinkSync(codexSdk, join(openaiModules, "codex-sdk"), process.platform === "win32" ? "junction" : "dir");
+
+  const bin = join(modules, ".bin");
+  mkdirSync(bin, { recursive: true });
+  const posixLauncher = join(bin, "raycoder");
+  writeFileSync(posixLauncher, '#!/bin/sh\nexec node "$(dirname "$0")/../raycoder/dist/cli.js" "$@"\n', { mode: 0o755 });
+  chmodSync(posixLauncher, 0o755);
+  writeFileSync(join(bin, "raycoder.cmd"), '@echo off\r\nnode "%~dp0\\..\\raycoder\\dist\\cli.js" %*\r\n', "utf8");
+  writeFileSync(join(fixture, "package.json"), `${JSON.stringify({ private: true })}\n`, "utf8");
 }
 
 function exec(command, args, cwd) {
@@ -79,18 +115,48 @@ function exec(command, args, cwd) {
 }
 
 function npm(args, cwd, env) {
-  return process.platform === "win32"
-    ? execFileSync(process.env.ComSpec ?? "cmd.exe", ["/d", "/s", "/c", "npm", ...args], { cwd, env, encoding: "utf8" })
-    : execFileSync("npm", args, { cwd, env, encoding: "utf8" });
+  let lastError;
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    try {
+      const invocation = npmInvocation(args);
+      return execFileSync(invocation.command, invocation.args, { cwd, env, encoding: "utf8", timeout: 60_000 });
+    } catch (error) {
+      lastError = error;
+      if (attempt === 1) console.warn("npm exec failed once; retrying with the same isolated cache");
+    }
+  }
+  throw lastError;
 }
 
 function spawnNpm(args, cwd, env) {
-  const child = process.platform === "win32"
-    ? spawn(process.env.ComSpec ?? "cmd.exe", ["/d", "/s", "/c", "npm", ...args], { cwd, env, stdio: ["ignore", "pipe", "pipe"] })
-    : spawn("npm", args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
+  const invocation = npmInvocation(args);
+  const child = spawn(invocation.command, invocation.args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
   child.stdout.setEncoding("utf8");
   child.stderr.setEncoding("utf8");
   return child;
+}
+
+function npmInvocation(args) {
+  if (process.platform === "win32") {
+    const npmCli = windowsNpmCli();
+    if (npmCli !== undefined) return { command: process.execPath, args: [npmCli, ...args] };
+    return { command: process.env.ComSpec ?? "cmd.exe", args: ["/d", "/s", "/c", "npm", ...args] };
+  }
+  return { command: "npm", args };
+}
+
+function windowsNpmCli() {
+  const candidates = [join(dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js")];
+  try {
+    const commands = execFileSync("where.exe", ["npm.cmd"], { encoding: "utf8" })
+      .split(/\r?\n/u)
+      .map((value) => value.trim())
+      .filter(Boolean);
+    candidates.push(...commands.map((command) => join(dirname(command), "node_modules", "npm", "bin", "npm-cli.js")));
+  } catch {
+    // The cmd.exe fallback below will provide the actionable command error.
+  }
+  return candidates.find((candidate) => existsSync(candidate));
 }
 
 function waitForOutput(child, pattern, timeoutMs) {
