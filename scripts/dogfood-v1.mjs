@@ -27,6 +27,7 @@ try {
   writeFileSync(join(installedRoot, "pnpm-workspace.yaml"), "packages: []\n", "utf8");
   exec("pnpm", ["install"], installedRoot);
   exec("git", ["clone", "--no-local", workspaceRoot, projectRoot], fixtureRoot);
+  exec("git", ["switch", "-c", "dogfood"], projectRoot);
   exec("git", ["config", "user.name", "raycoder dogfood"], projectRoot);
   exec("git", ["config", "user.email", "dogfood@raycoder.local"], projectRoot);
   const core = await import(pathToFileURL(join(installedRoot, "node_modules", "raycoder", "dist", "runtime.js")).href);
