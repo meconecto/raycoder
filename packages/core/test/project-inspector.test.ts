@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -46,7 +46,7 @@ describe("ProjectInspector", () => {
     writeFileSync(join(repository, "dirty.txt"), "dirty\n", "utf8");
 
     await expect(new ProjectInspector().inspect(nested)).resolves.toMatchObject({
-      kind: "git_repository", repositoryRoot: repository, branch: "main", hasBaseCommit: true, dirty: true,
+      kind: "git_repository", repositoryRoot: realpathSync(repository), branch: "main", hasBaseCommit: true, dirty: true,
     });
   });
 });

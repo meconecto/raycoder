@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, renameSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, realpathSync, renameSync, rmSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -133,7 +133,7 @@ describe("projectless application host", () => {
     const created = await fixture.projects.create({ path: original, confirmGitInit: true });
     const id = fixture.projects.list()[0]?.project.id;
     if (id === undefined) throw new Error("Expected project");
-    expect(created.projectRoot).toBe(original);
+    expect(created.projectRoot).toBe(realpathSync(original));
     fixture.projects.closeProject(id);
     renameSync(original, moved);
     const server = await listen(fixture.host);
