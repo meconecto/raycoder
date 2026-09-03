@@ -42,7 +42,7 @@ function verifyChecksum() {
 
 function exec(executable, args, cwd) {
   if (process.platform === "win32" && (executable === "pnpm" || executable === "npm")) {
-    execFileSync(process.env.ComSpec ?? "cmd.exe", ["/d", "/s", "/c", `${executable}.cmd`, ...args], { cwd, stdio: "inherit" });
+    execFileSync(process.env.ComSpec ?? "cmd.exe", ["/d", "/s", "/c", executable, ...args], { cwd, stdio: "inherit" });
     return;
   }
   execFileSync(executable, args, { cwd, stdio: "inherit" });
