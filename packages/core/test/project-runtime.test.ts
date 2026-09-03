@@ -1,10 +1,11 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { FakeAgentAdapter } from "../src/fake-agent-adapter.js";
 import { NodeProcessRunner } from "../src/process.js";
 import { ProjectManager } from "../src/project-manager.js";
+import { ProjectInspector } from "../src/project-inspector.js";
 import { ProjectInitializationConfirmationError, ProjectRegistry } from "../src/project-registry.js";
 
 const temporaryDirectories: string[] = [];
@@ -42,7 +43,37 @@ describe("ProjectRegistry and ProjectRuntime", () => {
     const created = await registry.create({ path: fresh, name: "Fresh", confirmGitInit: true });
     expect(created.name).toBe("Fresh");
     expect((await runner.run("git", ["rev-parse", "--is-inside-work-tree"], { cwd: fresh })).stdout.trim()).toBe("true");
+    expect((await runner.run("git", ["log", "-1", "--format=%an <%ae>|%s"], { cwd: fresh })).stdout.trim())
+      .toBe("raycoder <raycoder@local.invalid>|chore: initialize raycoder project");
+    await expect(runner.run("git", ["config", "--local", "--get", "user.name"], { cwd: fresh })).rejects.toThrow();
     registry.close();
+  });
+
+  it("inspects paths before mutation and initializes an existing folder without staging its files", async () => {
+    const root = mkdtempSync(join(tmpdir(), "raycoder-onboarding-"));
+    temporaryDirectories.push(root);
+    const existing = join(root, "existing");
+    const missing = join(root, "missing");
+    mkdirSync(existing);
+    writeFileSync(join(existing, "private.txt"), "not automatically tracked\n", "utf8");
+    const inspector = new ProjectInspector(runner);
+    expect(await inspector.inspect(missing)).toMatchObject({ kind: "missing", canCreate: true });
+    expect(await inspector.inspect(existing)).toMatchObject({ kind: "non_git_directory", canInitialize: true });
+
+    const manager = new ProjectManager(
+      new ProjectRegistry(join(root, "projects.db")),
+      () => ({ adapter: new FakeAgentAdapter() }),
+      inspector,
+    );
+    const runtime = await manager.initialize({ path: existing, confirmGitInit: true });
+    expect(runtime.baseBranch).toBe("main");
+    expect((await runner.run("git", ["status", "--porcelain"], { cwd: existing })).stdout.trim()).toBe("?? private.txt");
+    expect(await inspector.inspect(existing)).toMatchObject({
+      kind: "git_repository",
+      hasBaseCommit: false,
+      dirty: true,
+    });
+    manager.close();
   });
 
   it("runs projects concurrently while preserving sequential dependency execution inside each project", async () => {

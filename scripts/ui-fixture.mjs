@@ -30,8 +30,11 @@ const runtime = await projects.register(projectRoot, "UI fixture");
 runtime.tickets.create({ id: "foundation", title: "Foundation", description: "Build the durable project foundation" });
 runtime.tickets.create({ id: "interface", title: "Interface", description: "Expose the workflow in the browser", predecessorIds: ["foundation"] });
 const preflight = {
+  canServe: true,
+  canExecute: true,
   canStart: true,
   essential: [{ name: "node", ok: true, message: `Node ${process.versions.node} fixture` }],
+  tools: [{ name: "git", ok: true, message: "Git fixture" }],
   providers: [{ provider: "fake", executable: true, diagnostics: [{ level: "ok", code: "fake.ready", message: "Fixture adapter ready" }] }],
   upcoming: [],
 };

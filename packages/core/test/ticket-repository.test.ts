@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import Database from "better-sqlite3";
+import SqliteDatabase from "../src/sqlite.js";
 import { DependencyCycleError, createTicket, type Ticket } from "../src/domain.js";
 import { migrations } from "../src/migrations.js";
 import { TicketRepository } from "../src/ticket-repository.js";
@@ -50,7 +50,7 @@ describe("TicketRepository", () => {
     const directory = mkdtempSync(join(tmpdir(), "raycoder-db-v1-"));
     temporaryDirectories.push(directory);
     const path = join(directory, "raycoder.db");
-    const database = new Database(path);
+    const database = new SqliteDatabase(path);
     const firstMigration = migrations[0];
     if (firstMigration === undefined) throw new Error("Expected migration 1");
     database.exec(`CREATE TABLE schema_migrations (

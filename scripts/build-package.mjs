@@ -25,9 +25,10 @@ await build({
   alias: {
     "@raycoder/core": join(workspaceRoot, "packages", "core", "src", "index.ts"),
   },
-  external: ["@openai/codex-sdk", "better-sqlite3"],
+  external: ["@openai/codex-sdk"],
   logLevel: "info",
 });
 await copyFile(join(workspaceRoot, "README.md"), join(outdir, "README.md"));
 await copyFile(join(workspaceRoot, "LICENSE"), join(outdir, "LICENSE"));
 await cp(join(workspaceRoot, "assets"), join(outdir, "assets"), { recursive: true });
+await cp(join(packageRoot, "src", "assets", "ui"), join(outdir, "assets", "ui"), { recursive: true });

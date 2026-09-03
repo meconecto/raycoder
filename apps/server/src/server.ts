@@ -1,24 +1,43 @@
 import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { MemoryService, PlannedTicket, PreflightReport, ProjectConfigOverride, ProjectManager, ProjectOrchestrator, ProjectRuntime, TicketRepository } from "@raycoder/core";
-import { createTicket } from "@raycoder/core";
-import { UI_HTML } from "./ui.js";
+import { createTicket, ProjectCleanupService } from "@raycoder/core";
+import type { RaycoderApplicationHost } from "./application-host.js";
+import { NativeDirectoryPicker, type DirectoryPicker } from "./platform.js";
+
+export interface InstanceIdentity {
+  readonly id: string;
+  readonly nonce: string;
+  readonly appVersion: string;
+  readonly protocolVersion: number;
+  readonly port: number;
+}
 
 export interface RaycoderServerOptions {
-  readonly repository: TicketRepository;
-  readonly orchestrator: ProjectOrchestrator;
-  readonly preflight: PreflightReport;
-  readonly projectRoot: string;
-  readonly baseBranch: string;
+  readonly app?: RaycoderApplicationHost;
+  readonly repository?: TicketRepository;
+  readonly orchestrator?: ProjectOrchestrator;
+  readonly preflight?: PreflightReport;
+  readonly projectRoot?: string;
+  readonly baseBranch?: string;
   readonly projects?: ProjectManager;
   readonly memory?: MemoryService;
+  readonly directoryPicker?: DirectoryPicker;
+  readonly uiRoot?: string;
+  readonly instance?: InstanceIdentity;
+  readonly onShutdown?: () => void;
 }
 
 export function createRaycoderServer(options: RaycoderServerOptions): Server {
   const executionErrors = new Map<string, string>();
+  const projects = options.app?.projects ?? options.projects;
+  const cleanup = projects === undefined ? undefined : new ProjectCleanupService(projects);
   return createServer((request, response) => {
-    void route(request, response, options, executionErrors).catch((error: unknown) => {
-      sendJson(response, 500, { error: error instanceof Error ? error.message : String(error) });
+    void route(request, response, options, executionErrors, cleanup).catch((error: unknown) => {
+      sendError(response, 500, errorCode(error), error);
     });
   });
 }
@@ -28,43 +47,86 @@ async function route(
   response: ServerResponse,
   options: RaycoderServerOptions,
   executionErrors: Map<string, string>,
+  cleanup?: ProjectCleanupService,
 ): Promise<void> {
   const url = new URL(request.url ?? "/", "http://localhost");
-  if (request.method === "GET" && url.pathname === "/") {
-    response.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
-    response.end(UI_HTML);
+  if (!validHost(request.headers.host)) {
+    sendError(response, 403, "request.invalid_host", new Error("Only loopback requests are accepted"));
+    return;
+  }
+  if (isMutation(request.method) && !validOrigin(request.headers.origin, request.headers.host)) {
+    sendError(response, 403, "request.invalid_origin", new Error("Cross-origin mutations are not accepted"));
+    return;
+  }
+  if (request.method === "GET" && ["/", "/app.js", "/styles.css"].includes(url.pathname)) {
+    await sendUiAsset(response, url.pathname, options.uiRoot);
+    return;
+  }
+  if (request.method === "GET" && url.pathname === "/api/instance") {
+    if (options.instance === undefined || request.headers["x-raycoder-instance-nonce"] !== options.instance.nonce) {
+      sendError(response, 404, "instance.not_found", new Error("Instance not found"));
+      return;
+    }
+    const { nonce: _, ...publicIdentity } = options.instance;
+    void _;
+    sendJson(response, 200, publicIdentity);
+    return;
+  }
+  if (request.method === "POST" && url.pathname === "/api/instance/shutdown") {
+    if (options.instance === undefined || request.headers["x-raycoder-instance-nonce"] !== options.instance.nonce) {
+      sendError(response, 404, "instance.not_found", new Error("Instance not found"));
+      return;
+    }
+    if (options.onShutdown === undefined) {
+      sendError(response, 409, "instance.shutdown_unavailable", new Error("Instance shutdown is unavailable"));
+      return;
+    }
+    sendJson(response, 202, { shuttingDown: true });
+    setImmediate(options.onShutdown);
     return;
   }
   if (request.method === "GET" && url.pathname === "/api/preflight") {
-    sendJson(response, 200, options.preflight);
+    sendJson(response, 200, currentPreflight(options));
     return;
   }
-  if (request.method === "GET" && url.pathname === "/api/config") {
+  if (request.method === "POST" && url.pathname === "/api/preflight/refresh") {
+    sendJson(response, 200, options.app === undefined ? currentPreflight(options) : await options.app.refreshPreflight());
+    return;
+  }
+  if (request.method === "POST" && url.pathname === "/api/system/directory-picker") {
+    sendJson(response, 200, await (options.directoryPicker ?? new NativeDirectoryPicker()).selectDirectory());
+    return;
+  }
+  if (request.method === "GET" && url.pathname === "/api/config" && options.orchestrator !== undefined) {
     sendJson(response, 200, { integrationMode: options.orchestrator.integrationMode });
     return;
   }
-  if (options.memory !== undefined && request.method === "GET" && url.pathname === "/api/memory") {
-    sendJson(response, 200, await options.memory.preflight(options.projectRoot));
+  const memory = options.app?.memory ?? options.memory;
+  if (memory !== undefined && request.method === "GET" && url.pathname === "/api/memory") {
+    sendJson(response, 200, await memory.preflight(options.projectRoot));
     return;
   }
-  if (options.memory !== undefined && request.method === "POST" && url.pathname === "/api/memory/setup") {
+  if (memory !== undefined && options.projectRoot !== undefined && request.method === "POST" && url.pathname === "/api/memory/setup") {
     const body = await readJson(request);
-    sendJson(response, 200, await options.memory.configureCodex(body.confirm === true, options.projectRoot));
+    sendJson(response, 200, await memory.configureCodex(body.confirm === true, options.projectRoot));
     return;
   }
-  if (options.projects !== undefined && await routeProjects(request, response, url, options.projects, options.memory)) return;
-  if (request.method === "GET" && url.pathname === "/api/tickets") {
+  const projects = options.app?.projects ?? options.projects;
+  if (projects !== undefined && await routeProjects(request, response, url, projects, memory, currentPreflight(options), cleanup)) return;
+  if (options.repository !== undefined && request.method === "GET" && url.pathname === "/api/tickets") {
+    const repository = options.repository;
     sendJson(response, 200, {
-      tickets: options.repository.list().map((ticket) => ({
+      tickets: repository.list().map((ticket) => ({
         ...ticket,
-        integrationAttempt: options.repository.latestIntegrationAttempt(ticket.id),
+        integrationAttempt: repository.latestIntegrationAttempt(ticket.id),
         ...(executionErrors.has(ticket.id) ? { error: executionErrors.get(ticket.id) } : {}),
       })),
     });
     return;
   }
-  if (request.method === "POST" && url.pathname === "/api/demo") {
-    if (!options.preflight.canStart) {
+  if (options.repository !== undefined && options.orchestrator !== undefined && options.baseBranch !== undefined
+    && options.projectRoot !== undefined && request.method === "POST" && url.pathname === "/api/demo") {
+    if (!currentPreflight(options).canExecute) {
       sendJson(response, 503, { error: "Preflight does not allow agent execution" });
       return;
     }
@@ -91,7 +153,7 @@ async function route(
     return;
   }
   const integrationMatch = /^\/api\/tickets\/([^/]+)\/integration$/u.exec(url.pathname);
-  if (request.method === "POST" && integrationMatch !== null) {
+  if (options.orchestrator !== undefined && request.method === "POST" && integrationMatch !== null) {
     const encodedTicketId = integrationMatch[1];
     if (encodedTicketId === undefined) throw new Error("Missing ticket id");
     const ticketId = decodeURIComponent(encodedTicketId);
@@ -116,6 +178,8 @@ async function routeProjects(
   url: URL,
   projects: ProjectManager,
   memory?: MemoryService,
+  preflight?: PreflightReport,
+  cleanup?: ProjectCleanupService,
 ): Promise<boolean> {
   if (request.method === "GET" && url.pathname === "/api/projects") {
     sendJson(response, 200, { projects: projects.list() });
@@ -131,11 +195,26 @@ async function routeProjects(
         confirmGitInit: true,
         ...(typeof body.name === "string" ? { name: body.name } : {}),
       });
+    } else if (body.action === "initialize" && typeof body.path === "string" && body.confirmGitInit === true) {
+      await projects.initialize({
+        path: body.path,
+        confirmGitInit: true,
+        ...(typeof body.name === "string" ? { name: body.name } : {}),
+      });
     } else {
-      sendJson(response, 400, { error: "Use action register with path, or action create with path and confirmGitInit=true" });
+      sendError(response, 400, "project.invalid_action", new Error("Use register, create, or initialize with the required confirmation"));
       return true;
     }
     sendJson(response, 201, { projects: projects.list() });
+    return true;
+  }
+  if (request.method === "POST" && url.pathname === "/api/projects/inspect") {
+    const body = await readJson(request);
+    if (typeof body.path !== "string") {
+      sendError(response, 400, "project.path_required", new Error("path is required"));
+      return true;
+    }
+    sendJson(response, 200, await projects.inspect(body.path));
     return true;
   }
 
@@ -145,12 +224,47 @@ async function routeProjects(
   if (encodedProjectId === undefined) return false;
   const projectId = decodeURIComponent(encodedProjectId);
   const tail = projectMatch[2] ?? "";
+  if (request.method === "DELETE" && tail === "") {
+    projects.remove(projectId);
+    sendJson(response, 200, { projects: projects.list() });
+    return true;
+  }
   if (request.method === "POST" && tail === "open") {
     await projects.open(projectId);
     sendJson(response, 200, { project: projects.list().find((entry) => entry.project.id === projectId) });
     return true;
   }
+  if (request.method === "POST" && tail === "cleanup/plan") {
+    if (cleanup === undefined) throw new Error("Project cleanup is unavailable");
+    sendJson(response, 200, await cleanup.plan(projectId));
+    return true;
+  }
+  if (request.method === "POST" && tail === "cleanup/execute") {
+    if (cleanup === undefined) throw new Error("Project cleanup is unavailable");
+    const body = await readJson(request);
+    if (typeof body.planId !== "string" || typeof body.fingerprint !== "string" || typeof body.confirmationPhrase !== "string") {
+      sendError(response, 400, "cleanup.invalid_request", new Error("planId, fingerprint and confirmationPhrase are required"));
+      return true;
+    }
+    if (body.selectedTargetIds !== undefined && (!Array.isArray(body.selectedTargetIds) || !body.selectedTargetIds.every((id) => typeof id === "string"))) {
+      sendError(response, 400, "cleanup.invalid_targets", new Error("selectedTargetIds must be a string array"));
+      return true;
+    }
+    sendJson(response, 200, await cleanup.execute({
+      projectId,
+      planId: body.planId,
+      fingerprint: body.fingerprint,
+      confirmationPhrase: body.confirmationPhrase,
+      ...(body.selectedTargetIds === undefined ? {} : { selectedTargetIds: body.selectedTargetIds as string[] }),
+      ...(body.force === true ? { force: true } : {}),
+    }));
+    return true;
+  }
   const runtime = projects.get(projectId);
+  if (request.method === "GET" && tail === "inspection") {
+    sendJson(response, 200, await projects.inspect(runtime.projectRoot));
+    return true;
+  }
   if (request.method === "GET" && tail === "capabilities") {
     sendJson(response, 200, await runtime.capabilities());
     return true;
@@ -212,6 +326,10 @@ async function routeProjects(
     return true;
   }
   if (request.method === "POST" && tail === "planning/generate") {
+    if (preflight !== undefined && !preflight.canExecute) {
+      sendError(response, 503, "provider.unavailable", new Error("No provider is currently available for agent execution"));
+      return true;
+    }
     const body = await readJson(request);
     if (
       (body.kind !== "interrogation" && body.kind !== "spec")
@@ -337,11 +455,27 @@ async function routeProjects(
   if (request.method === "POST" && resource === "actions") {
     const body = await readJson(request);
     if (body.action === "run") {
+      if (preflight !== undefined && !preflight.canExecute) {
+        sendError(response, 503, "provider.unavailable", new Error("No provider is currently available for agent execution"));
+        return true;
+      }
+      if (!(await projects.inspect(runtime.projectRoot)).hasBaseCommit) {
+        sendError(response, 409, "project.baseline_required", new Error("Create the first Git commit before running tickets"));
+        return true;
+      }
       const dirtyPolicy = body.dirtyPolicy === "committed-head" ? "committed-head" : "cancel";
       sendJson(response, 202, await runtime.scheduler.enqueue(ticketId, { dirtyPolicy }));
       return true;
     }
     if (body.action === "retry") {
+      if (preflight !== undefined && !preflight.canExecute) {
+        sendError(response, 503, "provider.unavailable", new Error("No provider is currently available for agent execution"));
+        return true;
+      }
+      if (!(await projects.inspect(runtime.projectRoot)).hasBaseCommit) {
+        sendError(response, 409, "project.baseline_required", new Error("Create the first Git commit before retrying tickets"));
+        return true;
+      }
       sendJson(response, 200, await runtime.tickets.retry(ticketId, body.dirtyPolicy === "committed-head" ? "committed-head" : "cancel"));
       return true;
     }
@@ -388,6 +522,58 @@ async function readJson(request: IncomingMessage): Promise<Record<string, unknow
 
 function sendJson(response: ServerResponse, status: number, value: unknown): void {
   if (response.headersSent) return;
+  const normalized = status >= 400 && typeof value === "object" && value !== null && typeof (value as { error?: unknown }).error === "string"
+    ? { code: `http.${status}`, ...(value as Record<string, unknown>) }
+    : value;
   response.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
-  response.end(JSON.stringify(value));
+  response.end(JSON.stringify(normalized));
+}
+
+function sendError(response: ServerResponse, status: number, code: string, error: unknown): void {
+  sendJson(response, status, { error: error instanceof Error ? error.message : String(error), code });
+}
+
+function errorCode(error: unknown): string {
+  if (!(error instanceof Error)) return "internal.error";
+  return error.name.replace(/Error$/u, "").replace(/([a-z])([A-Z])/gu, "$1.$2").toLowerCase() || "internal.error";
+}
+
+function currentPreflight(options: RaycoderServerOptions): PreflightReport {
+  const report = options.app?.preflight ?? options.preflight;
+  if (report === undefined) throw new Error("Server requires a preflight report or application host");
+  return report;
+}
+
+function isMutation(method: string | undefined): boolean {
+  return method !== undefined && method !== "GET" && method !== "HEAD" && method !== "OPTIONS";
+}
+
+function validHost(host: string | undefined): boolean {
+  if (host === undefined) return false;
+  try {
+    const hostname = new URL(`http://${host}`).hostname;
+    return hostname === "127.0.0.1" || hostname === "localhost" || hostname === "[::1]";
+  } catch {
+    return false;
+  }
+}
+
+function validOrigin(origin: string | undefined, host: string | undefined): boolean {
+  if (origin === undefined) return true;
+  try {
+    const value = new URL(origin);
+    return value.protocol === "http:" && value.host === host;
+  } catch {
+    return false;
+  }
+}
+
+async function sendUiAsset(response: ServerResponse, pathname: string, uiRoot?: string): Promise<void> {
+  const root = uiRoot ?? fileURLToPath(new URL("./assets/ui", import.meta.url));
+  const [file, contentType] = pathname === "/"
+    ? ["index.html", "text/html; charset=utf-8"]
+    : pathname === "/app.js" ? ["app.js", "text/javascript; charset=utf-8"] : ["styles.css", "text/css; charset=utf-8"];
+  const contents = await readFile(join(root, file));
+  response.writeHead(200, { "content-type": contentType, "cache-control": "no-store", "x-content-type-options": "nosniff" });
+  response.end(contents);
 }

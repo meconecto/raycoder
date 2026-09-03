@@ -1,4 +1,4 @@
-import type Database from "better-sqlite3";
+import type SqliteDatabase from "./sqlite.js";
 
 interface Migration {
   readonly version: number;
@@ -194,7 +194,7 @@ export const migrations: readonly Migration[] = [
   },
 ] as const;
 
-export function migrate(database: Database.Database): void {
+export function migrate(database: SqliteDatabase): void {
   database.pragma("foreign_keys = ON");
   database.pragma("journal_mode = WAL");
   database.exec(`

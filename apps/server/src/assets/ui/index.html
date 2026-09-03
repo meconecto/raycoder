@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>raycoder</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <button class="brand" id="home" aria-label="Project selector">ray<span>coder</span></button>
+      <div class="eyebrow">Projects</div>
+      <div id="projects" class="project-list"></div>
+      <button id="add-project" class="wide">+ Add project</button>
+      <div class="eyebrow">Runtime</div>
+      <div id="sidebar-health" class="muted">Checking…</div>
+    </aside>
+    <main class="workspace">
+      <header class="topbar">
+        <div><p class="kicker" id="view-kicker">Local workspace</p><h1 id="project-name">Choose where to work</h1><p id="project-path"></p></div>
+        <div id="health" class="health"></div>
+      </header>
+      <nav class="nav hidden" id="nav" aria-label="Project views">
+        <button data-tab="overview" class="active">Overview</button>
+        <button data-tab="planning">Planning</button>
+        <button data-tab="tickets">Tickets</button>
+        <button data-tab="dag">DAG</button>
+        <button data-tab="history">History</button>
+        <button data-tab="sessions">Sessions</button>
+        <button data-tab="settings">Settings</button>
+      </nav>
+      <div id="error" class="error" role="alert"></div>
+      <div id="content"></div>
+    </main>
+  </div>
+
+  <dialog id="project-dialog">
+    <form method="dialog" class="stack" id="project-form">
+      <div><p class="kicker">Project onboarding</p><h2>Open a workspace</h2></div>
+      <label>Folder path<div class="field-row"><input id="new-project-path" placeholder="Absolute folder path" required><button type="button" id="browse-project">Browse…</button></div></label>
+      <label>Display name <span class="muted">optional</span><input id="new-project-name" placeholder="Defaults to folder name"></label>
+      <div id="inspection" class="inspection muted">Enter a path to inspect it without changing anything.</div>
+      <div class="actions"><button value="cancel" formnovalidate>Cancel</button><button type="button" id="inspect-project">Inspect</button><button type="button" id="save-project" class="primary" disabled>Confirm operation</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="cleanup-dialog">
+    <form method="dialog" class="stack" id="cleanup-form">
+      <div><p class="kicker danger">Destructive operation</p><h2>Cleanup project data</h2></div>
+      <p class="muted">Review every exact target. Risky work is preserved unless you select it and enable force.</p>
+      <div id="cleanup-targets" class="target-list"></div>
+      <div id="cleanup-warnings" class="warning"></div>
+      <label><input type="checkbox" id="cleanup-force" class="inline"> Allow forced deletion of selected risky work</label>
+      <label>Confirmation phrase<input id="cleanup-phrase" autocomplete="off"></label>
+      <div class="actions"><button value="cancel" formnovalidate>Cancel</button><button type="button" id="execute-cleanup" class="danger-button">Delete selected data</button></div>
+    </form>
+  </dialog>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

@@ -1,4 +1,4 @@
-# raycoder — brief v16 (integración incremental de proveedores)
+# raycoder — brief v17 (arranque y onboarding local)
 
 ## Qué es esto
 
@@ -35,12 +35,20 @@ Servidor local que se levanta con un comando de terminal, se usa desde el navega
 
 Sin instalación global persistente — única vía de ejecución. Por defecto resuelve la versión publicada según el comportamiento estándar de npm. La integridad del paquete la cubre el mecanismo estándar de npm.
 
+```text
+npx raycoder [project-directory] [--port <0-65535>] [--no-open]
+npx raycoder doctor [project-directory]
+npx raycoder cleanup --global
+```
+
+Una sola instancia global administra varios proyectos. Sin ruta se abre el selector sin elegir ni abrir automáticamente ninguno; con ruta se abre el repo válido o se precarga el wizard. El puerto se resuelve como `--port` → `RAYCODER_PORT` → `4317`: un puerto explícito ocupado falla, mientras que el default ocupado cae a uno libre del sistema. Una segunda invocación compatible reutiliza la instancia viva; una versión distinta informa su URL y requiere cerrarla sin matar el proceso. La URL siempre se imprime y `--no-open` desactiva el navegador.
+
 ## Preflight check, antes de cada arranque del servidor
 
 Corre en cada arranque, no toca nada, solo informa:
 
 ```
-✓ Node 20.x detectado
+✓ Node 24.x detectado
 ✓ codex — runtime oficial disponible y sesión de ChatGPT activa
 ○ claude — adapter todavía no incluido en esta build
 ○ cursor-agent — adapter todavía no incluido en esta build
@@ -49,13 +57,15 @@ Corre en cada arranque, no toca nada, solo informa:
 ✗ engram — no configurado para codex (`engram setup codex`)
 ```
 
-**Solo Node es requisito esencial de arranque para el usuario final.** Fallas individuales de proveedores no bloquean el arranque; el preflight solo bloquea por Node faltante o si no existe ningún proveedor ejecutable entre los adapters incluidos en esa build. Los proveedores implementados pero no disponibles quedan deshabilitados en la UI con diagnóstico accionable. Los proveedores todavía no implementados pueden mostrarse como próximos, pero no participan del resultado del preflight.
+**Solo Node 24 es requisito esencial para levantar el servidor local y su interfaz.** Git se diagnostica globalmente y se exige al abrir o crear proyectos, no para mostrar el selector. Fallas individuales de proveedores y la ausencia total de un proveedor ejecutable no bloquean el control plane: deshabilitan las acciones que requieren agentes y se muestran en la UI con diagnóstico accionable. Los proveedores todavía no implementados pueden mostrarse como próximos, pero no participan del resultado de ejecución del preflight.
 
 La incorporación de proveedores es **incremental**. La primera build implementa únicamente Codex. La arquitectura debe permitir llegar después a cuatro o cinco conexiones sin modificar el contrato del core, pero el número y la identidad final de esos proveedores no son una invariante de esta etapa.
 
 ## Desinstalación: clara
 
 Sin instalación global persistente, "desinstalar" en el sentido tradicional no aplica. `~/.raycoder/` y los `.raycoder/` de cada proyecto quedan como limpieza opcional y explícita, nunca automática.
+
+La limpieza de un proyecto parte de un inventario con fingerprint y vencimiento, requiere la frase exacta `DELETE <project-name>` y se niega mientras haya scheduler o preview activos. Worktrees dirty, tickets `FAILED`/`INTERRUPTED` y branches no integradas quedan deseleccionados y exigen `force`. Nunca se elimina el checkout principal ni rutas fuera de `.raycoder/workspaces` o `.raycoder/integrations`. El cleanup global exige TTY y `DELETE GLOBAL RAYCODER DATA`, rehúsa operar con una instancia viva y solo borra archivos globales conocidos.
 
 ## Modelo Git y workspace
 
@@ -79,6 +89,8 @@ ticket.branch · ticket.base_branch · ticket.base_commit · ticket.workspace
 raycoder **no modifica automáticamente archivos versionados del proyecto ni reescribe historia Git del usuario**, fuera de las operaciones explícitas de integración de tickets. Puede mantener metadata local no versionada necesaria para su funcionamiento.
 
 Concretamente: `.raycoder/` se excluye mediante mecanismos **locales no versionados** (`.git/info/exclude` cuando el proyecto es un repo Git) — **raycoder nunca edita el `.gitignore` del usuario**.
+
+El servidor acepta solamente assets estáticos allowlisteados. Las mutaciones validan `Host` y, cuando está presente, `Origin`; CLI y tests locales sin `Origin` siguen habilitados. Los errores HTTP usan `{ error, code, details? }`.
 
 ## Política de verificación y TDD
 
@@ -114,7 +126,7 @@ Excepcionales: BLOCKED · FAILED · CANCELLED · INTERRUPTED
 
 **Un ticket pasa de `QUEUED` a `READY` únicamente cuando todos sus predecesores están en `DONE`.** `READY_TO_MERGE` no satisface dependencias: hasta que el cambio no está integrado, no forma parte de la base canónica sobre la que pueden construirse tickets descendientes. Un ticket `BLOCKED` o `FAILED` mantiene bloqueados a sus descendientes.
 
-Visualización de solo lectura en la UI; modificaciones solicitadas conversacionalmente y aplicadas previa confirmación del usuario. **Invariante dura: el backend rechaza cualquier mutación que produzca un ciclo.**
+Visualización de solo lectura en la UI; RC3 conserva la superficie estructurada existente para proponer y confirmar el DAG. La planificación conversacional y el reemplazo del JSON manual quedan para RC4 o posterior. **Invariante dura: el backend rechaza cualquier mutación que produzca un ciclo.**
 
 ## Integración
 
@@ -220,6 +232,10 @@ Reusa el bundle de `mattpocock/skills`. Default global + override por proyecto, 
 
 Crear nuevo desde cero, o abrir un repo/carpeta existente en cualquier lugar del disco (incluido el propio repo de raycoder). No hay stack fijo — se detecta del repo.
 
+La inspección siempre es de solo lectura y precede al alta. Los repos existentes se canonicalizan a su raíz. Una ruta inexistente o carpeta vacía puede crearse, con confirmación, mediante `git init -b main` y un commit raíz vacío `chore: initialize raycoder project` firmado efímeramente como `raycoder <raycoder@local.invalid>`, sin modificar `.git/config`. Una carpeta no Git con archivos puede inicializarse con confirmación, pero raycoder no ejecuta `git add` ni crea un commit: la planificación queda disponible y los tickets no se ejecutan hasta que el usuario cree el baseline. Los errores parciales conservan el estado resultante y nunca disparan rollback destructivo.
+
+Los proyectos registrados exponen `closed`, `opening`, `open` y `error`. Un path movido permanece visible con diagnóstico reparable, y abrir un proyecto actualiza su recencia. Cada proyecto abierto posee un `ProjectRuntime` independiente; arrancar el host con cero proyectos no crea runtime ni `.raycoder/` en el directorio de invocación.
+
 ## Caso especial: raycoder editándose a sí mismo
 
 Copia de código fuente separada de la instalación activa. Cambios instalados de forma manual — build + reinstalación.
@@ -271,6 +287,8 @@ Los proveedores siguientes usan un SDK oficial cuando exista y cubra el contrato
 - OpenRouter / pago por token.
 - Contador de uso en vivo por proveedor.
 - Aislamiento a nivel de sistema operativo.
+- Planificación conversacional y eliminación de la entrada JSON manual.
+- Nuevos adapters de proveedor.
 
 ---
 

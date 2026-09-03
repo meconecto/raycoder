@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { mkdir, readdir, realpath } from "node:fs/promises";
 import { basename, dirname, resolve } from "node:path";
-import Database from "better-sqlite3";
+import SqliteDatabase from "./sqlite.js";
 import { NodeProcessRunner, type ProcessRunner } from "./process.js";
 
 export interface RegisteredProject {
@@ -29,12 +29,12 @@ export class ProjectInitializationConfirmationError extends Error {
 }
 
 export class ProjectRegistry {
-  readonly #database: Database.Database;
+  readonly #database: SqliteDatabase;
   readonly #runner: ProcessRunner;
 
   public constructor(databasePath: string, runner: ProcessRunner = new NodeProcessRunner()) {
     mkdirSync(dirname(resolve(databasePath)), { recursive: true });
-    this.#database = new Database(databasePath);
+    this.#database = new SqliteDatabase(databasePath);
     this.#runner = runner;
     this.#database.pragma("journal_mode = WAL");
     this.#database.exec(`
@@ -54,7 +54,7 @@ export class ProjectRegistry {
   }
 
   public list(): RegisteredProject[] {
-    return (this.#database.prepare("SELECT id, name, path, created_at, updated_at FROM projects ORDER BY name, id").all() as ProjectRow[])
+    return (this.#database.prepare("SELECT id, name, path, created_at, updated_at FROM projects ORDER BY updated_at DESC, name, id").all() as ProjectRow[])
       .map(fromProjectRow);
   }
 
@@ -80,7 +80,27 @@ export class ProjectRegistry {
     const entries = await readdir(requested);
     if (entries.length > 0) throw new Error(`New project directory is not empty: ${requested}`);
     await this.#runner.run("git", ["init", "-b", "main"], { cwd: requested, timeoutMs: 30_000 });
+    await this.#runner.run("git", [
+      "-c", "user.name=raycoder",
+      "-c", "user.email=raycoder@local.invalid",
+      "commit", "--allow-empty", "-m", "chore: initialize raycoder project",
+    ], { cwd: requested, timeoutMs: 30_000 });
     return this.#upsert(await canonicalPath(requested), input.name ?? basename(requested));
+  }
+
+  public async initialize(input: { path: string; name?: string; confirmGitInit: boolean }): Promise<RegisteredProject> {
+    if (!input.confirmGitInit) throw new ProjectInitializationConfirmationError();
+    const requested = resolve(input.path);
+    const root = await canonicalPath(requested);
+    await this.#runner.run("git", ["init", "-b", "main"], { cwd: root, timeoutMs: 30_000 });
+    return this.#upsert(root, input.name ?? basename(root));
+  }
+
+  public touch(id: string): RegisteredProject {
+    const now = new Date().toISOString();
+    const result = this.#database.prepare("UPDATE projects SET updated_at = ? WHERE id = ?").run(now, id);
+    if (result.changes === 0) throw new Error(`Unknown project: ${id}`);
+    return this.get(id);
   }
 
   public remove(id: string): void {

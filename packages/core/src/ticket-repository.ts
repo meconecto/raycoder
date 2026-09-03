@@ -1,4 +1,4 @@
-import Database from "better-sqlite3";
+import SqliteDatabase from "./sqlite.js";
 import {
   assertAcyclic,
   blockTicket,
@@ -213,10 +213,10 @@ export interface IntegrationAttemptUpdate {
 }
 
 export class TicketRepository {
-  readonly #database: Database.Database;
+  readonly #database: SqliteDatabase;
 
   public constructor(path: string) {
-    this.#database = new Database(path);
+    this.#database = new SqliteDatabase(path);
     migrate(this.#database);
   }
 
