@@ -18,6 +18,12 @@ import {
 import { RaycoderApplicationHost } from "./application-host.js";
 import { executeGlobalCleanup, inspectGlobalCleanup } from "./global-cleanup.js";
 import { INSTANCE_PROTOCOL_VERSION, InstanceCoordinator, type InstanceLease, type InstanceRecord } from "./instance-manager.js";
+import {
+  InstallerBusyError,
+  type InstallerChannel,
+  InstallerValidationError,
+  UserLocalInstaller,
+} from "./installer.js";
 import { NativeBrowserOpener, type BrowserOpener } from "./platform.js";
 import { listenWithFallback, parsePort, selectPort } from "./port-policy.js";
 import { createRaycoderServer, type InstanceIdentity } from "./server.js";
@@ -41,6 +47,16 @@ async function main(): Promise<void> {
   }
 
   const globalRoot = join(homedir(), ".raycoder");
+  if (args[0] === "install" || args[0] === "update" || args[0] === "rollback" || args[0] === "uninstall") {
+    try {
+      await handleInstallerCommand(args[0], args.slice(1), globalRoot);
+    } catch (error) {
+      if (!(error instanceof InstallerBusyError) && !(error instanceof InstallerValidationError)) throw error;
+      console.error(`raycoder ${args[0]}: ${error.message}`);
+      process.exitCode = 1;
+    }
+    return;
+  }
   const configStore = new GlobalConfigStore(join(globalRoot, "config.json"));
   if (args[0] === "config") {
     await handleConfigCommand(configStore, args.slice(1));
@@ -191,6 +207,141 @@ async function handleGlobalCleanup(globalRoot: string): Promise<void> {
   console.log(remaining.preservedEntries.length === 0 ? "Global raycoder data deleted." : "Known global raycoder data deleted; unknown entries were preserved.");
 }
 
+async function handleInstallerCommand(
+  command: "install" | "update" | "rollback" | "uninstall",
+  args: readonly string[],
+  defaultRoot: string,
+): Promise<void> {
+  const options = parseInstallerOptions(command, args);
+  const installer = new UserLocalInstaller({ root: options.root ?? defaultRoot });
+  if (command === "install") {
+    const result = await installer.install({
+      version: RAYCODER_VERSION,
+      ...(options.packageSource === undefined ? {} : { packageSource: options.packageSource }),
+      ...(options.channel === undefined ? {} : { channel: options.channel }),
+      shortcut: !options.noShortcut,
+      path: !options.noPath,
+    });
+    console.log(`Installed raycoder ${result.installedVersion} in ${join(installer.root, "versions", result.installedVersion)}`);
+    console.log(`Stable launcher: ${result.launcherDirectory}`);
+    if (result.shortcutPath !== null) console.log(`User shortcut: ${result.shortcutPath}`);
+    if (!options.noPath) console.log("Open a new terminal if the raycoder command is not visible in this one.");
+    printPruneWarnings(result.pruneWarnings);
+    return;
+  }
+  if (command === "update") {
+    const result = await installer.update();
+    console.log(result.reusedVersion
+      ? `raycoder ${result.installedVersion} is already active.`
+      : `Updated raycoder to ${result.installedVersion}.`);
+    printPruneWarnings(result.pruneWarnings);
+    return;
+  }
+  if (command === "rollback") {
+    const result = await installer.rollback();
+    console.log(`Rolled back raycoder to ${result.currentVersion}; ${result.previousVersion} remains available.`);
+    return;
+  }
+
+  const inventory = await installer.inventory();
+  if (inventory.ownedPaths.length === 0 && !inventory.pathEntryManaged) {
+    console.log("No user-local raycoder installation was found. Preserved configuration and project data were not changed.");
+    return;
+  }
+  console.log("The following installer-owned resources will be removed:");
+  for (const path of inventory.ownedPaths) console.log(`  ${path}`);
+  if (inventory.pathEntryManaged) console.log(`  PATH entry for ${join(installer.root, "bin")}`);
+  if (inventory.preservedPaths.length > 0) {
+    console.log("The following configuration or project data will be preserved:");
+    for (const path of inventory.preservedPaths) console.log(`  ${path}`);
+  }
+  if (!options.yes) {
+    if (!process.stdin.isTTY || !process.stdout.isTTY) {
+      throw new Error("Uninstall requires an interactive TTY or the explicit --yes flag");
+    }
+    const prompt = createInterface({ input: process.stdin, output: process.stdout });
+    try {
+      const phrase = await prompt.question("Type UNINSTALL RAYCODER to continue: ");
+      if (phrase !== "UNINSTALL RAYCODER") throw new Error("Confirmation phrase did not match; nothing was removed");
+    } finally {
+      prompt.close();
+    }
+  }
+  const result = await installer.uninstall();
+  console.log(`Removed ${result.removedPaths.length} installer-owned resources.`);
+  console.log(result.preservedPaths.length === 0
+    ? "No configuration or project data was present."
+    : "Configuration and project data were preserved.");
+}
+
+function parseInstallerOptions(
+  command: "install" | "update" | "rollback" | "uninstall",
+  args: readonly string[],
+): {
+  root?: string;
+  packageSource?: string;
+  channel?: InstallerChannel;
+  noShortcut: boolean;
+  noPath: boolean;
+  yes: boolean;
+} {
+  let root: string | undefined;
+  let packageSource: string | undefined;
+  let channel: InstallerChannel | undefined;
+  let noShortcut = false;
+  let noPath = false;
+  let yes = false;
+  for (let index = 0; index < args.length; index += 1) {
+    const argument = args[index];
+    if (argument === "--no-shortcut" && command === "install") {
+      noShortcut = true;
+      continue;
+    }
+    if (argument === "--no-path" && command === "install") {
+      noPath = true;
+      continue;
+    }
+    if (argument === "--yes" && command === "uninstall") {
+      yes = true;
+      continue;
+    }
+    if (argument === "--root") {
+      const value = args[index + 1];
+      if (value === undefined) throw usageError();
+      root = resolve(value);
+      index += 1;
+      continue;
+    }
+    if (argument === "--package" && command === "install") {
+      const value = args[index + 1];
+      if (value === undefined) throw usageError();
+      packageSource = resolve(value);
+      index += 1;
+      continue;
+    }
+    if (argument === "--channel" && command === "install") {
+      const value = args[index + 1];
+      if (value !== "stable" && value !== "prerelease") throw usageError();
+      channel = value;
+      index += 1;
+      continue;
+    }
+    throw usageError();
+  }
+  return {
+    ...(root === undefined ? {} : { root }),
+    ...(packageSource === undefined ? {} : { packageSource }),
+    ...(channel === undefined ? {} : { channel }),
+    noShortcut,
+    noPath,
+    yes,
+  };
+}
+
+function printPruneWarnings(warnings: readonly string[]): void {
+  for (const warning of warnings) console.warn(`Could not prune an inactive version: ${warning}`);
+}
+
 function parseStartupOptions(args: readonly string[]): StartupOptions {
   let projectPath: string | undefined;
   let cliPort: number | undefined;
@@ -300,6 +451,10 @@ function helpText(): string {
     "raycoder — local coding-agent orchestrator",
     "",
     "Usage:",
+    "  npx raycoder@latest install [--no-shortcut] [--no-path]",
+    "  raycoder update",
+    "  raycoder rollback",
+    "  raycoder uninstall [--yes]",
     "  npx raycoder [project-directory] [--port <0-65535>] [--no-open]",
     "  npx raycoder doctor [project-directory]",
     "  npx raycoder cleanup --global",
