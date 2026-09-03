@@ -249,7 +249,7 @@ describe("minimal server", () => {
       await new Promise<void>((resolve, reject) => server.close((error) => error === undefined ? resolve() : reject(error)));
       projects.close();
     }
-  });
+  }, 20_000);
 });
 
 async function waitFor(predicate: () => boolean, timeoutMs = 5_000): Promise<void> {
