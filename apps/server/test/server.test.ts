@@ -236,6 +236,11 @@ describe("minimal server", () => {
       await fetch(`${root}/planning/artifacts/${plan.artifact.id}/actions`, {
         method: "POST",
         headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "approve" }),
+      });
+      await fetch(`${root}/planning/artifacts/${plan.artifact.id}/actions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
         body: JSON.stringify({ action: "confirm_tickets" }),
       });
       expect(runtime.repository.get("planned").status).toBe("READY");
@@ -245,6 +250,221 @@ describe("minimal server", () => {
         mode: "diagnostic",
         running: false,
       });
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error === undefined ? resolve() : reject(error)));
+      projects.close();
+    }
+  }, 20_000);
+
+  it("runs conversational planning asynchronously through durable project APIs", async () => {
+    const projectRoot = await createRepository();
+    const registryRoot = mkdtempSync(join(tmpdir(), "raycoder-planning-api-"));
+    temporaryDirectories.push(registryRoot);
+    const projects = new ProjectManager(
+      new ProjectRegistry(join(registryRoot, "projects.db")),
+      () => ({ adapter: new FakeAgentAdapter() }),
+    );
+    const runtime = await projects.register(projectRoot);
+    const projectId = projects.list()[0]?.project.id;
+    if (projectId === undefined) throw new Error("Expected registered project");
+    const preflight: PreflightReport = {
+      canServe: true,
+      canExecute: true,
+      canStart: true,
+      essential: [{ name: "node", ok: true, message: "Node test" }],
+      tools: [{ name: "git", ok: true, message: "Git test" }],
+      providers: [{ provider: "fake", executable: true, diagnostics: [] }],
+      upcoming: [],
+    };
+    const server = createRaycoderServer({ projects, preflight });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as AddressInfo).port;
+    const root = `http://127.0.0.1:${port}/api/projects/${projectId}`;
+    try {
+      const foreignOrigin = await fetch(`${root}/planning/thread`, {
+        method: "POST",
+        headers: { origin: "http://evil.example" },
+      });
+      expect(foreignOrigin.status).toBe(403);
+      expect(await foreignOrigin.json()).toMatchObject({ code: "request.invalid_origin" });
+      const firstThread = await fetch(`${root}/planning/thread`, { method: "POST" }).then((response) => response.json()) as { thread: { id: string } };
+      const secondThread = await fetch(`${root}/planning/thread`, { method: "POST" }).then((response) => response.json()) as { thread: { id: string } };
+      expect(secondThread.thread.id).toBe(firstThread.thread.id);
+
+      const conversationResponse = await fetch(`${root}/planning/messages`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ content: "Plan a deterministic feature" }),
+      });
+      expect(conversationResponse.status).toBe(202);
+      const conversation = await conversationResponse.json() as { session: { id: string } };
+      await waitFor(() => runtime.repository.getPlanningSession(conversation.session.id).status === "completed");
+
+      const specResponse = await fetch(`${root}/planning/generations`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ stage: "spec" }),
+      });
+      expect(specResponse.status).toBe(202);
+      const specSession = await specResponse.json() as { session: { id: string } };
+      await waitFor(() => runtime.repository.getPlanningSession(specSession.session.id).status === "completed");
+      const spec = runtime.repository.listPlanningArtifacts("spec").at(-1);
+      if (spec === undefined) throw new Error("Expected generated SPEC");
+      const editedSpecResponse = await fetch(`${root}/planning/specs`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          predecessorArtifactId: spec.predecessorArtifactId,
+          replacesArtifactId: spec.id,
+          content: {
+            ...spec.content as Record<string, unknown>,
+            summary: "Corrected through the structured API",
+          },
+        }),
+      });
+      expect(editedSpecResponse.status).toBe(201);
+      const editedSpec = await editedSpecResponse.json() as { artifact: { id: string } };
+      await fetch(`${root}/planning/artifacts/${editedSpec.artifact.id}/actions`, {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "approve" }),
+      });
+
+      const ticketResponse = await fetch(`${root}/planning/generations`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ stage: "tickets", predecessorArtifactId: editedSpec.artifact.id }),
+      });
+      expect(ticketResponse.status).toBe(202);
+      const ticketSession = await ticketResponse.json() as { session: { id: string } };
+      await waitFor(() => runtime.repository.getPlanningSession(ticketSession.session.id).status === "completed");
+      const generatedPlan = runtime.repository.listPlanningArtifacts("tickets").at(-1);
+      if (generatedPlan === undefined) throw new Error("Expected generated ticket plan");
+
+      const rejectedConfirmation = await fetch(`${root}/planning/dag/confirm`, {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ artifactId: generatedPlan.id }),
+      });
+      expect(rejectedConfirmation.status).toBe(409);
+      expect(await rejectedConfirmation.json()).toMatchObject({ code: "planning.revision_invalid" });
+      const editedPlanResponse = await fetch(`${root}/planning/ticket-plans`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          predecessorArtifactId: editedSpec.artifact.id,
+          replacesArtifactId: generatedPlan.id,
+          tickets: [
+            { id: "plan-core", title: "Build core", description: "Corrected through the structured API", predecessorIds: [] },
+            { id: "plan-ui", title: "Build UI", description: "Expose the core", predecessorIds: ["plan-core"] },
+          ],
+        }),
+      });
+      expect(editedPlanResponse.status).toBe(201);
+      const editedPlan = await editedPlanResponse.json() as { artifact: { id: string } };
+      const plan = runtime.repository.getPlanningArtifact(editedPlan.artifact.id);
+      await fetch(`${root}/planning/artifacts/${plan.id}/actions`, {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "approve" }),
+      });
+      const confirmation = await fetch(`${root}/planning/dag/confirm`, {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ artifactId: plan.id }),
+      });
+      expect(confirmation.status).toBe(200);
+      expect(await confirmation.json()).toMatchObject({ tickets: [{ id: "plan-core" }, { id: "plan-ui" }] });
+
+      const cycle = await fetch(`${root}/planning/ticket-plans`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          predecessorArtifactId: editedSpec.artifact.id,
+          tickets: [
+            { id: "cycle-a", title: "A", description: "A", predecessorIds: ["cycle-b"] },
+            { id: "cycle-b", title: "B", description: "B", predecessorIds: ["cycle-a"] },
+          ],
+        }),
+      });
+      expect(cycle.status).toBe(409);
+      expect(await cycle.json()).toMatchObject({ code: "planning.cycle" });
+
+      const snapshot = await fetch(`${root}/planning`).then((response) => response.json()) as {
+        messages: unknown[]; sessions: unknown[]; events: unknown[]; confirmation: { artifactId: string };
+      };
+      expect(snapshot.messages.length).toBeGreaterThanOrEqual(5);
+      expect(snapshot.sessions).toHaveLength(3);
+      expect(snapshot.events.length).toBeGreaterThanOrEqual(6);
+      expect(snapshot.confirmation.artifactId).toBe(plan.id);
+      const events = await fetch(`${root}/planning/sessions/${ticketSession.session.id}/events`).then((response) => response.json()) as { events: unknown[] };
+      expect(events.events).toHaveLength(2);
+      expect(await fetch(`${root}/planning/messages`).then((response) => response.json())).toMatchObject({ messages: expect.any(Array) });
+      expect(await fetch(`${root}/planning/sessions`).then((response) => response.json())).toMatchObject({ sessions: expect.any(Array) });
+
+      const pending = await runtime.planning.prepareMessage("Cancel before it runs");
+      const cancelled = await fetch(`${root}/planning/sessions/${pending.id}/actions`, {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "cancel" }),
+      });
+      expect(cancelled.status).toBe(200);
+      expect(await cancelled.json()).toMatchObject({ session: { status: "cancelled" } });
+
+      const orphaned = await runtime.planning.prepareMessage("Cannot be resumed by fake");
+      runtime.repository.updatePlanningSession(orphaned.id, { status: "running", providerSessionId: "opaque" });
+      runtime.planning.recoverInterruptedSessions();
+      const recovery = await fetch(`${root}/planning/recovery`).then((response) => response.json()) as { interrupted: { id: string }[] };
+      expect(recovery.interrupted.map((session) => session.id)).toContain(orphaned.id);
+      const resume = await fetch(`${root}/planning/sessions/${orphaned.id}/actions`, {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "resume" }),
+      });
+      expect(resume.status).toBe(409);
+      expect(await resume.json()).toMatchObject({ code: "planning.resume_unsupported" });
+      const closeInterrupted = await fetch(`${root}/planning/sessions/${orphaned.id}/actions`, {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "cancel" }),
+      });
+      expect(closeInterrupted.status).toBe(200);
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error === undefined ? resolve() : reject(error)));
+      projects.close();
+    }
+  }, 20_000);
+
+  it("keeps planning available without HEAD while ticket execution stays disabled", async () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), "raycoder-unborn-api-"));
+    temporaryDirectories.push(projectRoot);
+    await runner.run("git", ["init", "-b", "main"], { cwd: projectRoot });
+    const registryRoot = mkdtempSync(join(tmpdir(), "raycoder-unborn-registry-"));
+    temporaryDirectories.push(registryRoot);
+    const projects = new ProjectManager(
+      new ProjectRegistry(join(registryRoot, "projects.db")),
+      () => ({ adapter: new FakeAgentAdapter() }),
+    );
+    const runtime = await projects.register(projectRoot);
+    const projectId = projects.list()[0]?.project.id;
+    if (projectId === undefined) throw new Error("Expected registered project");
+    const preflight: PreflightReport = {
+      canServe: true,
+      canExecute: true,
+      canStart: true,
+      essential: [{ name: "node", ok: true, message: "Node test" }],
+      tools: [{ name: "git", ok: true, message: "Git test" }],
+      providers: [{ provider: "fake", executable: true, diagnostics: [] }],
+      upcoming: [],
+    };
+    const server = createRaycoderServer({ projects, preflight });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as AddressInfo).port;
+    const root = `http://127.0.0.1:${port}/api/projects/${projectId}`;
+    try {
+      const interrogation = runtime.planning.approve(runtime.planning.recordInterrogation("Approved decisions").id);
+      const spec = runtime.planning.approve(runtime.planning.recordSpec("No-HEAD SPEC", interrogation.id).id);
+      const plan = runtime.planning.proposeTickets([
+        { id: "unborn-ticket", title: "Unborn", description: "Planned before baseline", predecessorIds: [] },
+      ], spec.id);
+      runtime.planning.approve(plan.id);
+      const confirmed = await fetch(`${root}/planning/dag/confirm`, {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ artifactId: plan.id }),
+      });
+      expect(confirmed.status).toBe(200);
+      expect(runtime.repository.get("unborn-ticket")).toMatchObject({ status: "READY", baseBranch: "main" });
+
+      const run = await fetch(`${root}/tickets/unborn-ticket/actions`, {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "run" }),
+      });
+      expect(run.status).toBe(409);
+      expect(await run.json()).toMatchObject({ code: "project.baseline_required" });
     } finally {
       await new Promise<void>((resolve, reject) => server.close((error) => error === undefined ? resolve() : reject(error)));
       projects.close();

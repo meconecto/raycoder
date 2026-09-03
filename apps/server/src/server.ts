@@ -3,8 +3,27 @@ import { readFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { MemoryService, PlannedTicket, PreflightReport, ProjectConfigOverride, ProjectManager, ProjectOrchestrator, ProjectRuntime, TicketRepository } from "@raycoder/core";
-import { createTicket, ProjectCleanupService } from "@raycoder/core";
+import type {
+  MemoryService,
+  PlannedTicket,
+  PreflightReport,
+  ProjectConfigOverride,
+  ProjectManager,
+  ProjectOrchestrator,
+  ProjectRuntime,
+  SpecContent,
+  TicketRepository,
+} from "@raycoder/core";
+import {
+  createTicket,
+  DependencyCycleError,
+  PlanningBusyError,
+  PlanningGenerationError,
+  PlanningInvalidStateError,
+  PlanningResumeUnsupportedError,
+  ProjectCleanupService,
+  UnknownTicketError,
+} from "@raycoder/core";
 import type { RaycoderApplicationHost } from "./application-host.js";
 import { NativeDirectoryPicker, type DirectoryPicker } from "./platform.js";
 
@@ -37,7 +56,8 @@ export function createRaycoderServer(options: RaycoderServerOptions): Server {
   const cleanup = projects === undefined ? undefined : new ProjectCleanupService(projects);
   return createServer((request, response) => {
     void route(request, response, options, executionErrors, cleanup).catch((error: unknown) => {
-      sendError(response, 500, errorCode(error), error);
+      const mapped = httpError(error);
+      sendError(response, mapped.status, mapped.code, error, mapped.details);
     });
   });
 }
@@ -301,10 +321,121 @@ async function routeProjects(
   }
   if (request.method === "GET" && tail === "planning") {
     const thread = runtime.repository.latestPlanningThread();
+    const sessions = thread === null ? [] : runtime.repository.listPlanningSessions(thread.id);
     sendJson(response, 200, {
       artifacts: runtime.repository.listPlanningArtifacts(),
       thread,
       messages: thread === null ? [] : runtime.repository.planningMessages(thread.id),
+      sessions,
+      events: sessions.flatMap((session) => runtime.repository.planningEvents(session.id)),
+      confirmation: runtime.repository.latestPlanningDagConfirmation(),
+      recovery: runtime.planningRecovery,
+      providerAvailable: preflight?.canExecute ?? true,
+    });
+    return true;
+  }
+  if (request.method === "POST" && tail === "planning/thread") {
+    const capabilities = await runtime.capabilities();
+    sendJson(response, 200, { thread: runtime.planning.ensureThread(capabilities.provider) });
+    return true;
+  }
+  if (request.method === "GET" && tail === "planning/messages") {
+    const thread = runtime.repository.latestPlanningThread();
+    sendJson(response, 200, { messages: thread === null ? [] : runtime.repository.planningMessages(thread.id) });
+    return true;
+  }
+  if (request.method === "GET" && tail === "planning/sessions") {
+    sendJson(response, 200, { sessions: runtime.repository.listPlanningSessions() });
+    return true;
+  }
+  if (request.method === "GET" && tail === "planning/recovery") {
+    sendJson(response, 200, {
+      interrupted: runtime.repository.listPlanningSessions().filter((session) => session.status === "interrupted"),
+      recoveredAtOpen: runtime.planningRecovery,
+    });
+    return true;
+  }
+  const planningEvents = /^planning\/sessions\/([^/]+)\/events$/u.exec(tail);
+  if (request.method === "GET" && planningEvents?.[1] !== undefined) {
+    const sessionId = decodeURIComponent(planningEvents[1]);
+    runtime.repository.getPlanningSession(sessionId);
+    sendJson(response, 200, { events: runtime.repository.planningEvents(sessionId) });
+    return true;
+  }
+  if (request.method === "POST" && tail === "planning/messages") {
+    if (!providerAvailable(preflight, response)) return true;
+    const body = await readJson(request);
+    if (typeof body.content !== "string" || body.content.trim().length === 0) {
+      sendError(response, 400, "planning.message_invalid", new Error("content is required"));
+      return true;
+    }
+    const session = await runtime.planning.prepareMessage(body.content);
+    schedulePlanning(runtime, session.id);
+    sendJson(response, 202, { session });
+    return true;
+  }
+  if (request.method === "POST" && tail === "planning/generations") {
+    if (!providerAvailable(preflight, response)) return true;
+    const body = await readJson(request);
+    if (body.stage !== "spec" && body.stage !== "tickets") {
+      sendError(response, 400, "planning.stage_invalid", new Error("stage must be spec or tickets"));
+      return true;
+    }
+    const session = await runtime.planning.prepareGeneration(
+      body.stage,
+      typeof body.predecessorArtifactId === "string" ? body.predecessorArtifactId : undefined,
+    );
+    schedulePlanning(runtime, session.id);
+    sendJson(response, 202, { session });
+    return true;
+  }
+  const planningSessionAction = /^planning\/sessions\/([^/]+)\/actions$/u.exec(tail);
+  if (request.method === "POST" && planningSessionAction?.[1] !== undefined) {
+    const sessionId = decodeURIComponent(planningSessionAction[1]);
+    const body = await readJson(request);
+    if (body.action === "cancel") {
+      sendJson(response, 200, { session: await runtime.scheduler.controlPlanning(async () => (
+        await runtime.planning.cancel(sessionId)
+      )) });
+      return true;
+    }
+    if (body.action === "resume") {
+      if (!providerAvailable(preflight, response)) return true;
+      const session = await runtime.planning.prepareResume(sessionId);
+      schedulePlanning(runtime, session.id);
+      sendJson(response, 202, { session });
+      return true;
+    }
+    sendError(response, 400, "planning.action_invalid", new Error("action must be cancel or resume"));
+    return true;
+  }
+  if (request.method === "POST" && tail === "planning/specs") {
+    const body = await readJson(request);
+    if (typeof body.predecessorArtifactId !== "string" || typeof body.content !== "object" || body.content === null) {
+      sendError(response, 400, "planning.spec_invalid", new Error("predecessorArtifactId and structured content are required"));
+      return true;
+    }
+    sendJson(response, 201, {
+      artifact: runtime.planning.editSpec(
+        body.content as unknown as SpecContent,
+        body.predecessorArtifactId,
+        typeof body.replacesArtifactId === "string" ? body.replacesArtifactId : undefined,
+      ),
+    });
+    return true;
+  }
+  if (request.method === "POST" && tail === "planning/ticket-plans") {
+    const body = await readJson(request);
+    if (!Array.isArray(body.tickets) || typeof body.predecessorArtifactId !== "string") {
+      sendError(response, 400, "planning.ticket_plan_invalid", new Error("tickets and predecessorArtifactId are required"));
+      return true;
+    }
+    sendJson(response, 201, {
+      artifact: runtime.planning.proposeTickets(
+        body.tickets as PlannedTicket[],
+        body.predecessorArtifactId,
+        typeof body.replacesArtifactId === "string" ? body.replacesArtifactId : undefined,
+      ),
     });
     return true;
   }
@@ -322,29 +453,21 @@ async function routeProjects(
       sendJson(response, 201, { artifact: runtime.planning.proposeTickets(body.tickets as PlannedTicket[], body.predecessorArtifactId) });
       return true;
     }
-    sendJson(response, 400, { error: "Invalid planning artifact payload" });
+    sendError(response, 400, "planning.artifact_invalid", new Error("Invalid planning artifact payload"));
     return true;
   }
   if (request.method === "POST" && tail === "planning/generate") {
-    if (preflight !== undefined && !preflight.canExecute) {
-      sendError(response, 503, "provider.unavailable", new Error("No provider is currently available for agent execution"));
-      return true;
-    }
+    if (!providerAvailable(preflight, response)) return true;
     const body = await readJson(request);
-    if (
-      (body.kind !== "interrogation" && body.kind !== "spec")
-      || typeof body.instruction !== "string"
-    ) {
-      sendJson(response, 400, { error: "kind interrogation|spec and instruction are required" });
+    if ((body.kind !== "interrogation" && body.kind !== "spec") || typeof body.instruction !== "string") {
+      sendError(response, 400, "planning.generation_invalid", new Error("kind interrogation|spec and instruction are required"));
       return true;
     }
-    sendJson(response, 201, {
-      artifact: await runtime.planning.generate(
-        body.kind,
-        body.instruction,
-        typeof body.predecessorArtifactId === "string" ? body.predecessorArtifactId : undefined,
-      ),
-    });
+    const session = body.kind === "interrogation"
+      ? await runtime.planning.prepareMessage(body.instruction)
+      : await runtime.planning.prepareGeneration("spec", typeof body.predecessorArtifactId === "string" ? body.predecessorArtifactId : undefined);
+    schedulePlanning(runtime, session.id);
+    sendJson(response, 202, { session });
     return true;
   }
   const planningAction = /^planning\/artifacts\/([^/]+)\/actions$/u.exec(tail);
@@ -356,10 +479,20 @@ async function routeProjects(
       return true;
     }
     if (body.action === "confirm_tickets") {
-      sendJson(response, 200, { tickets: runtime.planning.confirmTickets(artifactId) });
+      sendJson(response, 200, await runtime.scheduler.serialize(async () => runtime.planning.confirmTickets(artifactId)));
       return true;
     }
-    sendJson(response, 400, { error: "Unknown planning action" });
+    sendError(response, 400, "planning.action_invalid", new Error("Unknown planning action"));
+    return true;
+  }
+  if (request.method === "POST" && tail === "planning/dag/confirm") {
+    const body = await readJson(request);
+    if (typeof body.artifactId !== "string") {
+      sendError(response, 400, "planning.revision_invalid", new Error("artifactId is required"));
+      return true;
+    }
+    const artifactId = body.artifactId;
+    sendJson(response, 200, await runtime.scheduler.serialize(async () => runtime.planning.confirmTickets(artifactId)));
     return true;
   }
   if (request.method === "GET" && tail === "skills") {
@@ -500,6 +633,7 @@ async function routeProjects(
 function serializeTickets(runtime: ProjectRuntime): unknown[] {
   return runtime.repository.list().map((ticket) => ({
     ...ticket,
+    planningArtifactId: runtime.repository.ticketPlanningArtifactId(ticket.id),
     integrationAttempt: runtime.repository.latestIntegrationAttempt(ticket.id),
     review: runtime.repository.reviewDecisions(ticket.id).at(-1) ?? null,
   }));
@@ -529,8 +663,47 @@ function sendJson(response: ServerResponse, status: number, value: unknown): voi
   response.end(JSON.stringify(normalized));
 }
 
-function sendError(response: ServerResponse, status: number, code: string, error: unknown): void {
-  sendJson(response, status, { error: error instanceof Error ? error.message : String(error), code });
+function sendError(response: ServerResponse, status: number, code: string, error: unknown, details?: unknown): void {
+  sendJson(response, status, {
+    error: error instanceof Error ? error.message : String(error),
+    code,
+    ...(details === undefined ? {} : { details }),
+  });
+}
+
+function schedulePlanning(runtime: ProjectRuntime, sessionId: string): void {
+  void runtime.scheduler.schedulePlanning(sessionId, async () => await runtime.planning.runSession(sessionId)).catch(() => undefined);
+}
+
+function providerAvailable(preflight: PreflightReport | undefined, response: ServerResponse): boolean {
+  if (preflight === undefined || preflight.canExecute) return true;
+  sendError(
+    response,
+    503,
+    "provider.unavailable",
+    new Error("No provider is currently available for planning generation"),
+    { providers: preflight.providers },
+  );
+  return false;
+}
+
+function httpError(error: unknown): { status: number; code: string; details?: unknown } {
+  if (error instanceof DependencyCycleError) return { status: 409, code: "planning.cycle" };
+  if (error instanceof UnknownTicketError) return { status: 409, code: "planning.ticket_reference_invalid" };
+  if (error instanceof PlanningBusyError) return { status: 409, code: "planning.operation_busy" };
+  if (error instanceof PlanningResumeUnsupportedError) return { status: 409, code: "planning.resume_unsupported" };
+  if (error instanceof PlanningInvalidStateError) return { status: 409, code: "planning.revision_invalid" };
+  if (error instanceof PlanningGenerationError) {
+    return { status: 502, code: "planning.generation_failed", details: { providerCode: error.providerCode } };
+  }
+  if (error instanceof SyntaxError) return { status: 400, code: "request.invalid_json" };
+  if (error instanceof Error && /cannot be replaced|outside the previous plan depend|has started/u.test(error.message)) {
+    return { status: 409, code: "planning.unsafe_replacement" };
+  }
+  if (error instanceof Error && /Unknown planning (artifact|session|thread)/u.test(error.message)) {
+    return { status: 404, code: "planning.revision_invalid" };
+  }
+  return { status: 500, code: errorCode(error) };
 }
 
 function errorCode(error: unknown): string {

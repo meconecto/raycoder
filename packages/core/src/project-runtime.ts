@@ -16,7 +16,7 @@ import { Scheduler } from "./scheduler.js";
 import { SettingsService } from "./settings-service.js";
 import { SkillBundleManager } from "./skill-bundle-manager.js";
 import { TicketActions } from "./ticket-actions.js";
-import { TicketRepository } from "./ticket-repository.js";
+import { TicketRepository, type PlanningSession } from "./ticket-repository.js";
 
 export interface ProjectRuntimeOptions {
   readonly adapter: AgentAdapter;
@@ -41,6 +41,7 @@ export class ProjectRuntime {
   public readonly skills: SkillBundleManager;
   public readonly settings: SettingsService | null;
   public readonly recovery: readonly RecoveryResult[];
+  public readonly planningRecovery: readonly PlanningSession[];
   readonly #adapter: AgentAdapter;
 
   private constructor(input: {
@@ -55,6 +56,7 @@ export class ProjectRuntime {
     skills: SkillBundleManager;
     settings: SettingsService | null;
     recovery: readonly RecoveryResult[];
+    planningRecovery: readonly PlanningSession[];
     adapter: AgentAdapter;
   }) {
     this.projectRoot = input.projectRoot;
@@ -68,6 +70,7 @@ export class ProjectRuntime {
     this.skills = input.skills;
     this.settings = input.settings;
     this.recovery = input.recovery;
+    this.planningRecovery = input.planningRecovery;
     this.#adapter = input.adapter;
   }
 
@@ -107,6 +110,7 @@ export class ProjectRuntime {
     const scheduler = new Scheduler(repository, orchestrator, projectRoot);
     const tickets = new TicketActions(repository, orchestrator, scheduler, baseBranch, projectRoot);
     const planning = new PlanningPipeline(repository, options.adapter, projectRoot, baseBranch);
+    const planningRecovery = planning.recoverInterruptedSessions();
     const preview = new PreviewManager(repository, projectRoot, runner);
     return new ProjectRuntime({
       projectRoot,
@@ -120,6 +124,7 @@ export class ProjectRuntime {
       skills,
       settings,
       recovery,
+      planningRecovery,
       adapter: options.adapter,
     });
   }

@@ -16,6 +16,7 @@ import {
   type VerificationStatus,
 } from "./domain.js";
 import { migrate } from "./migrations.js";
+import type { AgentEvent } from "./agent-adapter.js";
 
 interface TicketRow {
   id: string;
@@ -29,6 +30,7 @@ interface TicketRow {
   workspace: string | null;
   created_at: string;
   updated_at: string;
+  planning_artifact_id: string | null;
 }
 
 interface IntegrationAttemptRow {
@@ -113,6 +115,10 @@ export interface AgentProcessObservation {
 
 export type PlanningArtifactKind = "interrogation" | "spec" | "tickets";
 export type PlanningArtifactStatus = "draft" | "approved" | "superseded";
+export type PlanningAuthorRole = "user" | "assistant" | "system";
+export type PlanningThreadStatus = "idle" | "running" | "interrupted" | "error";
+export type PlanningSessionStage = "conversation" | "spec" | "tickets";
+export type PlanningSessionStatus = "idle" | "running" | "completed" | "cancelled" | "interrupted" | "error";
 
 export interface PlanningArtifact {
   readonly id: string;
@@ -120,9 +126,15 @@ export interface PlanningArtifact {
   readonly revision: number;
   readonly content: unknown;
   readonly predecessorArtifactId: string | null;
+  readonly replacesArtifactId: string | null;
   readonly status: PlanningArtifactStatus;
+  readonly authorRole: PlanningAuthorRole;
+  readonly authorId: string | null;
+  readonly sourceSessionId: string | null;
+  readonly sourceMessageIds: readonly number[];
   readonly createdAt: string;
   readonly approvedAt: string | null;
+  readonly confirmedAt: string | null;
 }
 
 interface PlanningArtifactRow {
@@ -131,16 +143,21 @@ interface PlanningArtifactRow {
   revision: number;
   content_json: string;
   predecessor_artifact_id: string | null;
+  replaces_artifact_id: string | null;
   status: PlanningArtifactStatus;
+  author_role: PlanningAuthorRole;
+  author_id: string | null;
+  source_session_id: string | null;
   created_at: string;
   approved_at: string | null;
+  confirmed_at: string | null;
 }
 
 export interface PlanningThread {
   readonly id: string;
   readonly provider: string;
   readonly providerSessionId: string | null;
-  readonly status: string;
+  readonly status: PlanningThreadStatus;
   readonly createdAt: string;
   readonly updatedAt: string;
 }
@@ -151,6 +168,66 @@ export interface PlanningMessage {
   readonly sequence: number;
   readonly role: "user" | "assistant" | "system";
   readonly content: string;
+  readonly sessionId: string | null;
+  readonly createdAt: string;
+}
+
+export interface PlanningSession {
+  readonly id: string;
+  readonly threadId: string;
+  readonly adapterSessionId: string | null;
+  readonly provider: string;
+  readonly providerSessionId: string | null;
+  readonly stage: PlanningSessionStage;
+  readonly request: unknown;
+  readonly resumedFromSessionId: string | null;
+  readonly status: PlanningSessionStatus;
+  readonly errorCode: string | null;
+  readonly errorDetail: string | null;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly completedAt: string | null;
+}
+
+interface PlanningSessionRow {
+  id: string;
+  thread_id: string;
+  adapter_session_id: string | null;
+  provider: string;
+  provider_session_id: string | null;
+  stage: PlanningSessionStage;
+  request_json: string;
+  resumed_from_session_id: string | null;
+  status: PlanningSessionStatus;
+  error_code: string | null;
+  error_detail: string | null;
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
+}
+
+export interface PlanningEvent {
+  readonly id: number;
+  readonly sessionId: string;
+  readonly sequence: number;
+  readonly type: AgentEvent["type"];
+  readonly payload: AgentEvent;
+  readonly createdAt: string;
+}
+
+interface PlanningEventRow {
+  id: number;
+  session_id: string;
+  sequence: number;
+  type: AgentEvent["type"];
+  payload_json: string;
+  created_at: string;
+}
+
+export interface PlanningDagConfirmation {
+  readonly id: string;
+  readonly artifactId: string;
+  readonly replacedArtifactId: string | null;
   readonly createdAt: string;
 }
 
@@ -286,6 +363,14 @@ export class TicketRepository {
 
   public list(): Ticket[] {
     return (this.#database.prepare("SELECT * FROM tickets ORDER BY created_at, id").all() as TicketRow[]).map(fromRow);
+  }
+
+  public ticketPlanningArtifactId(ticketId: string): string | null {
+    const row = this.#database.prepare(
+      "SELECT planning_artifact_id AS planningArtifactId FROM tickets WHERE id = ?",
+    ).get(ticketId) as { planningArtifactId: string | null } | undefined;
+    if (row === undefined) throw new UnknownTicketError(ticketId);
+    return row.planningArtifactId;
   }
 
   public listByStatus(statuses: readonly TicketStatus[]): Ticket[] {
@@ -512,37 +597,80 @@ export class TicketRepository {
     kind: PlanningArtifactKind;
     content: unknown;
     predecessorArtifactId?: string;
+    replacesArtifactId?: string;
+    authorRole?: PlanningAuthorRole;
+    authorId?: string;
+    sourceSessionId?: string;
+    sourceMessageIds?: readonly number[];
     createdAt?: string;
   }): PlanningArtifact {
     if (input.predecessorArtifactId !== undefined) this.getPlanningArtifact(input.predecessorArtifactId);
-    const row = this.#database.prepare("SELECT COALESCE(MAX(revision), 0) AS revision FROM planning_artifacts WHERE kind = ?")
-      .get(input.kind) as { revision: number };
+    if (input.replacesArtifactId !== undefined) {
+      const replaced = this.getPlanningArtifact(input.replacesArtifactId);
+      if (replaced.kind !== input.kind) throw new Error(`Cannot replace ${replaced.kind} with ${input.kind}`);
+    }
+    if (input.sourceSessionId !== undefined) this.getPlanningSession(input.sourceSessionId);
+    const sourceMessageIds = [...new Set(input.sourceMessageIds ?? [])];
+    for (const messageId of sourceMessageIds) {
+      const message = this.#database.prepare("SELECT id FROM planning_messages WHERE id = ?").get(messageId);
+      if (message === undefined) throw new Error(`Unknown planning message: ${messageId}`);
+    }
     const createdAt = input.createdAt ?? new Date().toISOString();
-    this.#database.prepare(`INSERT INTO planning_artifacts
-      (id, kind, revision, content_json, predecessor_artifact_id, status, created_at)
-      VALUES (?, ?, ?, ?, ?, 'draft', ?)`)
-      .run(
+    const transaction = this.#database.transaction(() => {
+      const row = this.#database.prepare("SELECT COALESCE(MAX(revision), 0) AS revision FROM planning_artifacts WHERE kind = ?")
+        .get(input.kind) as { revision: number };
+      this.#database.prepare(`INSERT INTO planning_artifacts (
+        id, kind, revision, content_json, predecessor_artifact_id, replaces_artifact_id,
+        status, author_role, author_id, source_session_id, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?)`)
+        .run(
         input.id,
         input.kind,
         row.revision + 1,
         JSON.stringify(input.content),
         input.predecessorArtifactId ?? null,
+        input.replacesArtifactId ?? null,
+        input.authorRole ?? "system",
+        input.authorId ?? null,
+        input.sourceSessionId ?? null,
         createdAt,
       );
+      const insertSource = this.#database.prepare(
+        "INSERT INTO planning_artifact_sources (artifact_id, message_id) VALUES (?, ?)",
+      );
+      for (const messageId of sourceMessageIds) insertSource.run(input.id, messageId);
+    });
+    transaction();
     return this.getPlanningArtifact(input.id);
   }
 
   public getPlanningArtifact(id: string): PlanningArtifact {
     const row = this.#database.prepare("SELECT * FROM planning_artifacts WHERE id = ?").get(id) as PlanningArtifactRow | undefined;
     if (row === undefined) throw new Error(`Unknown planning artifact: ${id}`);
-    return planningArtifactFromRow(row);
+    return planningArtifactFromRow(row, this.planningArtifactSourceMessageIds(id));
   }
 
   public listPlanningArtifacts(kind?: PlanningArtifactKind): PlanningArtifact[] {
     const rows = kind === undefined
       ? this.#database.prepare("SELECT * FROM planning_artifacts ORDER BY created_at, rowid").all()
       : this.#database.prepare("SELECT * FROM planning_artifacts WHERE kind = ? ORDER BY revision").all(kind);
-    return (rows as PlanningArtifactRow[]).map(planningArtifactFromRow);
+    return (rows as PlanningArtifactRow[]).map((row) => planningArtifactFromRow(
+      row,
+      this.planningArtifactSourceMessageIds(row.id),
+    ));
+  }
+
+  public latestApprovedPlanningArtifact(kind: PlanningArtifactKind): PlanningArtifact | null {
+    const row = this.#database.prepare(
+      "SELECT * FROM planning_artifacts WHERE kind = ? AND status = 'approved' ORDER BY revision DESC LIMIT 1",
+    ).get(kind) as PlanningArtifactRow | undefined;
+    return row === undefined ? null : planningArtifactFromRow(row, this.planningArtifactSourceMessageIds(row.id));
+  }
+
+  public planningArtifactSourceMessageIds(artifactId: string): number[] {
+    return (this.#database.prepare(
+      "SELECT message_id AS messageId FROM planning_artifact_sources WHERE artifact_id = ? ORDER BY message_id",
+    ).all(artifactId) as { messageId: number }[]).map((row) => row.messageId);
   }
 
   public approvePlanningArtifact(id: string, now = new Date().toISOString()): PlanningArtifact {
@@ -562,7 +690,7 @@ export class TicketRepository {
     this.#database.prepare(`INSERT INTO planning_threads
       (id, provider, provider_session_id, status, created_at, updated_at)
       VALUES (@id, @provider, @providerSessionId, @status, @createdAt, @updatedAt)
-      ON CONFLICT(id) DO UPDATE SET provider_session_id = excluded.provider_session_id,
+      ON CONFLICT(id) DO UPDATE SET provider = excluded.provider, provider_session_id = excluded.provider_session_id,
       status = excluded.status, updated_at = excluded.updated_at`).run(input);
     return this.getPlanningThread(input.id);
   }
@@ -586,14 +714,16 @@ export class TicketRepository {
     role: PlanningMessage["role"],
     content: string,
     createdAt = new Date().toISOString(),
+    sessionId: string | null = null,
   ): PlanningMessage {
     this.getPlanningThread(threadId);
+    if (sessionId !== null) this.getPlanningSession(sessionId);
     const transaction = this.#database.transaction(() => {
       const row = this.#database.prepare("SELECT COALESCE(MAX(sequence), -1) + 1 AS sequence FROM planning_messages WHERE thread_id = ?")
         .get(threadId) as { sequence: number };
       const result = this.#database.prepare(`INSERT INTO planning_messages
-        (thread_id, sequence, role, content, created_at) VALUES (?, ?, ?, ?, ?)`)
-        .run(threadId, row.sequence, role, content, createdAt);
+        (thread_id, sequence, role, content, created_at, session_id) VALUES (?, ?, ?, ?, ?, ?)`)
+        .run(threadId, row.sequence, role, content, createdAt, sessionId);
       return Number(result.lastInsertRowid);
     });
     const id = transaction();
@@ -602,8 +732,221 @@ export class TicketRepository {
 
   public planningMessages(threadId: string): PlanningMessage[] {
     return this.#database.prepare(`SELECT id, thread_id AS threadId, sequence, role, content,
-      created_at AS createdAt FROM planning_messages WHERE thread_id = ? ORDER BY sequence`)
+      session_id AS sessionId, created_at AS createdAt FROM planning_messages WHERE thread_id = ? ORDER BY sequence`)
       .all(threadId) as PlanningMessage[];
+  }
+
+  public createPlanningSession(input: {
+    id: string;
+    threadId: string;
+    provider: string;
+    stage: PlanningSessionStage;
+    request: unknown;
+    resumedFromSessionId?: string;
+    createdAt?: string;
+  }): PlanningSession {
+    this.getPlanningThread(input.threadId);
+    if (input.resumedFromSessionId !== undefined) this.getPlanningSession(input.resumedFromSessionId);
+    const createdAt = input.createdAt ?? new Date().toISOString();
+    this.#database.prepare(`INSERT INTO planning_sessions (
+      id, thread_id, provider, stage, request_json, resumed_from_session_id, status, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, 'idle', ?, ?)`).run(
+      input.id,
+      input.threadId,
+      input.provider,
+      input.stage,
+      JSON.stringify(input.request),
+      input.resumedFromSessionId ?? null,
+      createdAt,
+      createdAt,
+    );
+    return this.getPlanningSession(input.id);
+  }
+
+  public getPlanningSession(id: string): PlanningSession {
+    const row = this.#database.prepare("SELECT * FROM planning_sessions WHERE id = ?").get(id) as PlanningSessionRow | undefined;
+    if (row === undefined) throw new Error(`Unknown planning session: ${id}`);
+    return planningSessionFromRow(row);
+  }
+
+  public listPlanningSessions(threadId?: string): PlanningSession[] {
+    const rows = threadId === undefined
+      ? this.#database.prepare("SELECT * FROM planning_sessions ORDER BY created_at, rowid").all()
+      : this.#database.prepare("SELECT * FROM planning_sessions WHERE thread_id = ? ORDER BY created_at, rowid").all(threadId);
+    return (rows as PlanningSessionRow[]).map(planningSessionFromRow);
+  }
+
+  public latestPlanningSession(stage?: PlanningSessionStage): PlanningSession | null {
+    const row = stage === undefined
+      ? this.#database.prepare("SELECT * FROM planning_sessions ORDER BY created_at DESC, rowid DESC LIMIT 1").get()
+      : this.#database.prepare(
+          "SELECT * FROM planning_sessions WHERE stage = ? ORDER BY created_at DESC, rowid DESC LIMIT 1",
+        ).get(stage);
+    return row === undefined ? null : planningSessionFromRow(row as PlanningSessionRow);
+  }
+
+  public updatePlanningSession(
+    id: string,
+    patch: {
+      adapterSessionId?: string | null;
+      providerSessionId?: string | null;
+      status?: PlanningSessionStatus;
+      errorCode?: string | null;
+      errorDetail?: string | null;
+      completedAt?: string | null;
+    },
+    now = new Date().toISOString(),
+  ): PlanningSession {
+    const current = this.getPlanningSession(id);
+    this.#database.prepare(`UPDATE planning_sessions SET
+      adapter_session_id = ?, provider_session_id = ?, status = ?, error_code = ?, error_detail = ?,
+      updated_at = ?, completed_at = ? WHERE id = ?`).run(
+      patch.adapterSessionId === undefined ? current.adapterSessionId : patch.adapterSessionId,
+      patch.providerSessionId === undefined ? current.providerSessionId : patch.providerSessionId,
+      patch.status ?? current.status,
+      patch.errorCode === undefined ? current.errorCode : patch.errorCode,
+      patch.errorDetail === undefined ? current.errorDetail : patch.errorDetail,
+      now,
+      patch.completedAt === undefined ? current.completedAt : patch.completedAt,
+      id,
+    );
+    return this.getPlanningSession(id);
+  }
+
+  public appendPlanningEvent(sessionId: string, event: AgentEvent): PlanningEvent {
+    this.getPlanningSession(sessionId);
+    const transaction = this.#database.transaction(() => {
+      const row = this.#database.prepare(
+        "SELECT COALESCE(MAX(sequence), -1) + 1 AS sequence FROM planning_events WHERE session_id = ?",
+      ).get(sessionId) as { sequence: number };
+      const result = this.#database.prepare(`INSERT INTO planning_events
+        (session_id, sequence, type, payload_json, created_at) VALUES (?, ?, ?, ?, ?)`)
+        .run(sessionId, row.sequence, event.type, JSON.stringify(event), event.timestamp);
+      return Number(result.lastInsertRowid);
+    });
+    const id = transaction();
+    return this.planningEvents(sessionId).find((event) => event.id === id) as PlanningEvent;
+  }
+
+  public planningEvents(sessionId: string): PlanningEvent[] {
+    return (this.#database.prepare(
+      "SELECT * FROM planning_events WHERE session_id = ? ORDER BY sequence",
+    ).all(sessionId) as PlanningEventRow[]).map(planningEventFromRow);
+  }
+
+  public interruptPlanningSessions(now = new Date().toISOString()): PlanningSession[] {
+    const uncertain = this.listPlanningSessions().filter((session) => session.status === "idle" || session.status === "running");
+    if (uncertain.length === 0) return [];
+    const transaction = this.#database.transaction(() => {
+      for (const session of uncertain) {
+        this.#database.prepare(`UPDATE planning_sessions SET status = 'interrupted', error_code = ?,
+          error_detail = ?, updated_at = ?, completed_at = ? WHERE id = ?`).run(
+            "planning.bootstrap_interrupted",
+            "raycoder restarted before this planning operation reached a durable terminal state.",
+            now,
+            now,
+            session.id,
+          );
+      }
+      const threadIds = new Set(uncertain.map((session) => session.threadId));
+      for (const threadId of threadIds) {
+        this.#database.prepare("UPDATE planning_threads SET status = 'interrupted', updated_at = ? WHERE id = ?")
+          .run(now, threadId);
+      }
+    });
+    transaction();
+    return uncertain.map((session) => this.getPlanningSession(session.id));
+  }
+
+  public latestPlanningDagConfirmation(): PlanningDagConfirmation | null {
+    const row = this.#database.prepare(`SELECT id, artifact_id AS artifactId,
+      replaced_artifact_id AS replacedArtifactId, created_at AS createdAt
+      FROM planning_dag_confirmations ORDER BY created_at DESC, rowid DESC LIMIT 1`).get() as PlanningDagConfirmation | undefined;
+    return row ?? null;
+  }
+
+  public confirmPlanningDag(input: {
+    confirmationId: string;
+    artifactId: string;
+    entries: readonly { ticket: Ticket; predecessorIds: readonly string[] }[];
+    now?: string;
+  }): { tickets: Ticket[]; confirmation: PlanningDagConfirmation } {
+    const artifact = this.getPlanningArtifact(input.artifactId);
+    if (artifact.kind !== "tickets" || artifact.status !== "approved") {
+      throw new Error(`Planning artifact ${artifact.id} is not an approved ticket plan`);
+    }
+    const currentApproved = this.latestApprovedPlanningArtifact("tickets");
+    if (currentApproved?.id !== artifact.id) throw new Error(`Planning artifact ${artifact.id} is not the current approved ticket plan`);
+    const previous = this.latestPlanningDagConfirmation();
+    if (artifact.confirmedAt !== null && previous?.artifactId === artifact.id) {
+      const tickets = (this.#database.prepare(
+        "SELECT * FROM tickets WHERE planning_artifact_id = ? ORDER BY created_at, id",
+      ).all(artifact.id) as TicketRow[]).map(fromRow);
+      return { tickets, confirmation: previous };
+    }
+
+    const replacedArtifactId = previous?.artifactId ?? null;
+    const replacedRows = replacedArtifactId === null
+      ? []
+      : this.#database.prepare("SELECT * FROM tickets WHERE planning_artifact_id = ? ORDER BY created_at, id")
+          .all(replacedArtifactId) as TicketRow[];
+    if (replacedRows.some((ticket) => ticket.status !== "READY" && ticket.status !== "QUEUED")) {
+      throw new Error("The previously confirmed DAG has started and cannot be replaced");
+    }
+    const replacedIds = new Set(replacedRows.map((ticket) => ticket.id));
+    const existingEdges = this.dependencies();
+    if (existingEdges.some((edge) => !replacedIds.has(edge.ticketId) && replacedIds.has(edge.predecessorId))) {
+      throw new Error("Tickets outside the previous plan depend on it, so the DAG cannot be replaced");
+    }
+    const retained = this.list().filter((ticket) => !replacedIds.has(ticket.id));
+    const newIds = input.entries.map((entry) => entry.ticket.id);
+    if (new Set(newIds).size !== newIds.length || newIds.some((id) => retained.some((ticket) => ticket.id === id))) {
+      throw new Error("Ticket plan contains duplicate or existing ticket ids");
+    }
+    const retainedEdges = existingEdges.filter(
+      (edge) => !replacedIds.has(edge.ticketId) && !replacedIds.has(edge.predecessorId),
+    );
+    const newEdges = input.entries.flatMap((entry) => [...new Set(entry.predecessorIds)].map((predecessorId) => ({
+      ticketId: entry.ticket.id,
+      predecessorId,
+    })));
+    assertAcyclic(
+      [...retained.map((ticket) => ticket.id), ...newIds],
+      [...retainedEdges, ...newEdges],
+    );
+
+    const now = input.now ?? new Date().toISOString();
+    const transaction = this.#database.transaction(() => {
+      if (replacedArtifactId !== null) {
+        this.#database.prepare(`DELETE FROM ticket_dependencies WHERE ticket_id IN (
+          SELECT id FROM tickets WHERE planning_artifact_id = ?
+        )`).run(replacedArtifactId);
+        this.#database.prepare("DELETE FROM tickets WHERE planning_artifact_id = ?").run(replacedArtifactId);
+      }
+      const insertTicket = this.#database.prepare(`INSERT INTO tickets (
+        id, title, description, status, blocked_from, branch, base_branch, base_commit, workspace,
+        created_at, updated_at, planning_artifact_id
+      ) VALUES (@id, @title, @description, @status, @blockedFrom, @branch, @baseBranch, @baseCommit,
+        @workspace, @createdAt, @updatedAt, @planningArtifactId)`);
+      for (const entry of input.entries) insertTicket.run({ ...entry.ticket, planningArtifactId: artifact.id });
+      const insertEdge = this.#database.prepare(
+        "INSERT INTO ticket_dependencies (ticket_id, predecessor_id) VALUES (?, ?)",
+      );
+      for (const edge of newEdges) insertEdge.run(edge.ticketId, edge.predecessorId);
+      for (const entry of input.entries) {
+        this.#recordHistory(entry.ticket.id, null, entry.ticket.status, "created_from_confirmed_plan", entry.ticket.createdAt);
+      }
+      this.#database.prepare(`INSERT INTO planning_dag_confirmations
+        (id, artifact_id, replaced_artifact_id, created_at) VALUES (?, ?, ?, ?)`)
+        .run(input.confirmationId, artifact.id, replacedArtifactId, now);
+      this.#database.prepare("UPDATE planning_artifacts SET confirmed_at = ? WHERE id = ?").run(now, artifact.id);
+      this.#promoteReadyTickets(now);
+    });
+    transaction();
+    return {
+      tickets: input.entries.map((entry) => this.get(entry.ticket.id)),
+      confirmation: this.latestPlanningDagConfirmation() as PlanningDagConfirmation,
+    };
   }
 
   public setProjectSetting(key: string, value: unknown, now = new Date().toISOString()): void {
@@ -882,15 +1225,51 @@ function parseStringArray(json: string, label: string): string[] {
   return value as string[];
 }
 
-function planningArtifactFromRow(row: PlanningArtifactRow): PlanningArtifact {
+function planningArtifactFromRow(row: PlanningArtifactRow, sourceMessageIds: readonly number[]): PlanningArtifact {
   return {
     id: row.id,
     kind: row.kind,
     revision: row.revision,
     content: JSON.parse(row.content_json) as unknown,
     predecessorArtifactId: row.predecessor_artifact_id,
+    replacesArtifactId: row.replaces_artifact_id,
     status: row.status,
+    authorRole: row.author_role,
+    authorId: row.author_id,
+    sourceSessionId: row.source_session_id,
+    sourceMessageIds,
     createdAt: row.created_at,
     approvedAt: row.approved_at,
+    confirmedAt: row.confirmed_at,
+  };
+}
+
+function planningSessionFromRow(row: PlanningSessionRow): PlanningSession {
+  return {
+    id: row.id,
+    threadId: row.thread_id,
+    adapterSessionId: row.adapter_session_id,
+    provider: row.provider,
+    providerSessionId: row.provider_session_id,
+    stage: row.stage,
+    request: JSON.parse(row.request_json) as unknown,
+    resumedFromSessionId: row.resumed_from_session_id,
+    status: row.status,
+    errorCode: row.error_code,
+    errorDetail: row.error_detail,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    completedAt: row.completed_at,
+  };
+}
+
+function planningEventFromRow(row: PlanningEventRow): PlanningEvent {
+  return {
+    id: row.id,
+    sessionId: row.session_id,
+    sequence: row.sequence,
+    type: row.type,
+    payload: JSON.parse(row.payload_json) as AgentEvent,
+    createdAt: row.created_at,
   };
 }
