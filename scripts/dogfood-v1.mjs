@@ -62,7 +62,7 @@ try {
 
 function exec(command, args, cwd) {
   if (process.platform === "win32" && (command === "pnpm" || command === "npm")) {
-    execFileSync(process.env.ComSpec ?? "cmd.exe", ["/d", "/s", "/c", `${command}.cmd`, ...args], {
+    execFileSync(process.env.ComSpec ?? "cmd.exe", ["/d", "/s", "/c", command, ...args], {
       cwd,
       stdio: "inherit",
       env: { ...process.env, CI: "true" },

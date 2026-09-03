@@ -72,7 +72,7 @@ try {
 
 function exec(command, args, cwd) {
   if (process.platform === "win32" && (command === "pnpm" || command === "npm")) {
-    execFileSync(process.env.ComSpec ?? "cmd.exe", ["/d", "/s", "/c", `${command}.cmd`, ...args], { cwd, stdio: "inherit" });
+    execFileSync(process.env.ComSpec ?? "cmd.exe", ["/d", "/s", "/c", command, ...args], { cwd, stdio: "inherit" });
     return;
   }
   execFileSync(command, args, { cwd, stdio: "inherit" });
@@ -80,13 +80,13 @@ function exec(command, args, cwd) {
 
 function npm(args, cwd, env) {
   return process.platform === "win32"
-    ? execFileSync(process.env.ComSpec ?? "cmd.exe", ["/d", "/s", "/c", "npm.cmd", ...args], { cwd, env, encoding: "utf8" })
+    ? execFileSync(process.env.ComSpec ?? "cmd.exe", ["/d", "/s", "/c", "npm", ...args], { cwd, env, encoding: "utf8" })
     : execFileSync("npm", args, { cwd, env, encoding: "utf8" });
 }
 
 function spawnNpm(args, cwd, env) {
   const child = process.platform === "win32"
-    ? spawn(process.env.ComSpec ?? "cmd.exe", ["/d", "/s", "/c", "npm.cmd", ...args], { cwd, env, stdio: ["ignore", "pipe", "pipe"] })
+    ? spawn(process.env.ComSpec ?? "cmd.exe", ["/d", "/s", "/c", "npm", ...args], { cwd, env, stdio: ["ignore", "pipe", "pipe"] })
     : spawn("npm", args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
   child.stdout.setEncoding("utf8");
   child.stderr.setEncoding("utf8");
