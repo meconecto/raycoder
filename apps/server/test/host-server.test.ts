@@ -133,7 +133,7 @@ describe("projectless application host", () => {
     const created = await fixture.projects.create({ path: original, confirmGitInit: true });
     const id = fixture.projects.list()[0]?.project.id;
     if (id === undefined) throw new Error("Expected project");
-    expect(created.projectRoot).toBe(realpathSync(original));
+    expect(created.projectRoot).toBe(realpathSync.native(original));
     fixture.projects.closeProject(id);
     renameSync(original, moved);
     const server = await listen(fixture.host);

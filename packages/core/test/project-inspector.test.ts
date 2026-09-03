@@ -46,7 +46,7 @@ describe("ProjectInspector", () => {
     writeFileSync(join(repository, "dirty.txt"), "dirty\n", "utf8");
 
     await expect(new ProjectInspector().inspect(nested)).resolves.toMatchObject({
-      kind: "git_repository", repositoryRoot: realpathSync(repository), branch: "main", hasBaseCommit: true, dirty: true,
+      kind: "git_repository", repositoryRoot: realpathSync.native(repository), branch: "main", hasBaseCommit: true, dirty: true,
     });
   });
 });
