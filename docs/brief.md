@@ -1,4 +1,4 @@
-# raycoder — brief v17 (arranque y onboarding local)
+# raycoder — brief v18 (planificación conversacional)
 
 ## Qué es esto
 
@@ -126,7 +126,7 @@ Excepcionales: BLOCKED · FAILED · CANCELLED · INTERRUPTED
 
 **Un ticket pasa de `QUEUED` a `READY` únicamente cuando todos sus predecesores están en `DONE`.** `READY_TO_MERGE` no satisface dependencias: hasta que el cambio no está integrado, no forma parte de la base canónica sobre la que pueden construirse tickets descendientes. Un ticket `BLOCKED` o `FAILED` mantiene bloqueados a sus descendientes.
 
-Visualización de solo lectura en la UI; RC3 conserva la superficie estructurada existente para proponer y confirmar el DAG. La planificación conversacional y el reemplazo del JSON manual quedan para RC4 o posterior. **Invariante dura: el backend rechaza cualquier mutación que produzca un ciclo.**
+Visualización de solo lectura en la UI. El DAG nace o se reemplaza únicamente al confirmar un artefacto de tickets aprobado; una conversación, una respuesta del proveedor y una edición de formulario nunca lo modifican directamente. **Invariante dura: el dominio rechaza cualquier mutación que produzca un ciclo antes de persistirla.**
 
 ## Integración
 
@@ -228,6 +228,48 @@ Tabla de 5 filas × 3 columnas (Proveedor, Modelo, Esfuerzo) en Ajustes, opcione
 
 Reusa el bundle de `mattpocock/skills`. Default global + override por proyecto, con copia automática del bundle al abrir un proyecto sin skills propias.
 
+## Planificación conversacional
+
+Cada proyecto tiene un único hilo durable de planificación. La entrada primaria del usuario es
+una conversación asistida por `grill-with-docs`; el JSON puede existir internamente, en la API
+o como diagnóstico, pero no se presenta como formulario principal. El flujo obligatorio es:
+
+```text
+conversación → SPEC borrador → aprobación explícita de revisión →
+tickets borrador → aprobación explícita de revisión → confirmación del DAG ejecutable
+```
+
+Solicitar una SPEC fija la conversación visible hasta ese momento como un artefacto aprobado
+de interrogación. La sesión nueva que produce la SPEC recibe únicamente ese artefacto como
+contexto explícito. La sesión que produce tickets recibe únicamente la revisión aprobada de la
+SPEC. Corregir la conversación y regenerar, o editar una SPEC o un plan de tickets mediante
+formularios estructurados, crea una revisión nueva; nunca reescribe ni elimina revisiones
+anteriores.
+
+SPEC y tickets conservan revisión, autoría, timestamps, estado, artefacto reemplazado y vínculos
+a los mensajes y sesiones que los originaron. Sólo una revisión concreta puede aprobarse. Una
+aprobación nueva marca como reemplazada la aprobación anterior de esa misma etapa, sin borrarla.
+Confirmar exige la revisión de tickets aprobada y vigente. Una confirmación posterior puede
+reemplazar atómicamente el DAG creado por una confirmación anterior únicamente mientras sus
+tickets sigan sin ejecución (`READY`/`QUEUED`); trabajo ya iniciado o tickets ajenos al plan se
+preservan y bloquean el reemplazo con diagnóstico.
+
+Las sesiones de planificación y sus eventos normalizados se persisten en orden. El hilo expone
+`idle`, `running`, `interrupted` y `error`; cada sesión conserva además sus estados terminales de
+completada o cancelada. Cancelar es explícito. Al reiniciar, una sesión que figuraba en ejecución
+se marca `interrupted`: SQLite no prueba que el proceso externo siga vivo. Reanudar utiliza el id
+opaco del proveedor sólo cuando el adapter declara esa capacidad; en caso contrario se ofrece un
+diagnóstico accionable y el usuario puede cancelar esa sesión y continuar con una nueva.
+
+Las acciones de planificación que invocan o controlan agentes pasan por el `Scheduler` del
+proyecto. El progreso se reconstruye desde mensajes, sesiones y eventos durables; la UI puede
+consultarlo incrementalmente sin convertir una conexión abierta en fuente de verdad.
+
+Sin proveedor ejecutable, proyectos, conversación histórica, artefactos y formularios
+estructurados siguen disponibles. Enviar, regenerar o reanudar se deshabilita con diagnóstico.
+Un repositorio sin `HEAD` también puede planificar, editar, aprobar y confirmar el DAG, pero no
+ejecutar tickets hasta tener un commit base.
+
 ## Proyectos: nuevo o existente
 
 Crear nuevo desde cero, o abrir un repo/carpeta existente en cualquier lugar del disco (incluido el propio repo de raycoder). No hay stack fijo — se detecta del repo.
@@ -245,7 +287,9 @@ Copia de código fuente separada de la instalación activa. Cambios instalados d
 - Un hilo para la planificación (`grill-with-docs` → `to-spec` → `to-tickets`).
 - Un hilo por ticket (`implement` → `code-review`).
 
-Cada sesión recibe como contexto explícito solo el artefacto de la etapa anterior.
+Cada sesión recibe como contexto explícito sólo el artefacto aprobado de la etapa anterior. El
+historial de mensajes permanece durable para auditoría y UI, pero no se concatena de forma
+implícita al prompt de una sesión nueva.
 
 ## Vista previa
 
@@ -287,7 +331,6 @@ Los proveedores siguientes usan un SDK oficial cuando exista y cubra el contrato
 - OpenRouter / pago por token.
 - Contador de uso en vivo por proveedor.
 - Aislamiento a nivel de sistema operativo.
-- Planificación conversacional y eliminación de la entrada JSON manual.
 - Nuevos adapters de proveedor.
 
 ---
