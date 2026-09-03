@@ -192,6 +192,76 @@ export const migrations: readonly Migration[] = [
       CREATE INDEX planning_messages_thread_sequence ON planning_messages(thread_id, sequence);
     `,
   },
+  {
+    version: 5,
+    name: "conversational_planning_sessions_and_traceability",
+    sql: `
+      ALTER TABLE planning_threads ADD COLUMN singleton INTEGER NOT NULL DEFAULT 1 CHECK (singleton = 1);
+      UPDATE planning_threads SET status = 'idle' WHERE status NOT IN ('idle', 'running', 'interrupted', 'error');
+      CREATE UNIQUE INDEX planning_threads_singleton ON planning_threads(singleton);
+
+      CREATE TABLE planning_sessions (
+        id TEXT PRIMARY KEY,
+        thread_id TEXT NOT NULL REFERENCES planning_threads(id) ON DELETE CASCADE,
+        adapter_session_id TEXT,
+        provider TEXT NOT NULL,
+        provider_session_id TEXT,
+        stage TEXT NOT NULL CHECK (stage IN ('conversation', 'spec', 'tickets')),
+        request_json TEXT NOT NULL,
+        resumed_from_session_id TEXT REFERENCES planning_sessions(id) ON DELETE SET NULL,
+        status TEXT NOT NULL CHECK (status IN (
+          'idle', 'running', 'completed', 'cancelled', 'interrupted', 'error'
+        )),
+        error_code TEXT,
+        error_detail TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        completed_at TEXT
+      );
+
+      CREATE TABLE planning_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL REFERENCES planning_sessions(id) ON DELETE CASCADE,
+        sequence INTEGER NOT NULL,
+        type TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE (session_id, sequence)
+      );
+
+      ALTER TABLE planning_messages ADD COLUMN session_id TEXT REFERENCES planning_sessions(id) ON DELETE SET NULL;
+
+      ALTER TABLE planning_artifacts ADD COLUMN author_role TEXT NOT NULL DEFAULT 'system'
+        CHECK (author_role IN ('user', 'assistant', 'system'));
+      ALTER TABLE planning_artifacts ADD COLUMN author_id TEXT;
+      ALTER TABLE planning_artifacts ADD COLUMN source_session_id TEXT REFERENCES planning_sessions(id) ON DELETE SET NULL;
+      ALTER TABLE planning_artifacts ADD COLUMN replaces_artifact_id TEXT REFERENCES planning_artifacts(id) ON DELETE SET NULL;
+      ALTER TABLE planning_artifacts ADD COLUMN confirmed_at TEXT;
+
+      CREATE TABLE planning_artifact_sources (
+        artifact_id TEXT NOT NULL REFERENCES planning_artifacts(id) ON DELETE CASCADE,
+        message_id INTEGER NOT NULL REFERENCES planning_messages(id) ON DELETE RESTRICT,
+        PRIMARY KEY (artifact_id, message_id)
+      );
+
+      ALTER TABLE tickets ADD COLUMN planning_artifact_id TEXT REFERENCES planning_artifacts(id) ON DELETE RESTRICT;
+
+      CREATE TABLE planning_dag_confirmations (
+        id TEXT PRIMARY KEY,
+        artifact_id TEXT NOT NULL REFERENCES planning_artifacts(id) ON DELETE RESTRICT,
+        replaced_artifact_id TEXT REFERENCES planning_artifacts(id) ON DELETE RESTRICT,
+        created_at TEXT NOT NULL
+      );
+
+      CREATE INDEX planning_sessions_thread_created ON planning_sessions(thread_id, created_at, id);
+      CREATE INDEX planning_sessions_status ON planning_sessions(status);
+      CREATE INDEX planning_events_session_sequence ON planning_events(session_id, sequence);
+      CREATE INDEX planning_messages_session ON planning_messages(session_id, sequence);
+      CREATE INDEX planning_artifact_sources_message ON planning_artifact_sources(message_id, artifact_id);
+      CREATE INDEX tickets_planning_artifact ON tickets(planning_artifact_id, created_at, id);
+      CREATE INDEX planning_dag_confirmations_created ON planning_dag_confirmations(created_at, id);
+    `,
+  },
 ] as const;
 
 export function migrate(database: SqliteDatabase): void {

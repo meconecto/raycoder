@@ -14,6 +14,7 @@ export class Scheduler {
   readonly #projectRoot: string;
   #tail: Promise<void> = Promise.resolve();
   #activeTicketId: string | null = null;
+  #activePlanningSessionId: string | null = null;
   #pending = 0;
 
   public constructor(repository: TicketRepository, orchestrator: ProjectOrchestrator, projectRoot: string) {
@@ -28,6 +29,10 @@ export class Scheduler {
 
   public get pendingCount(): number {
     return this.#pending;
+  }
+
+  public get activePlanningSessionId(): string | null {
+    return this.#activePlanningSessionId;
   }
 
   public enqueue(ticketId: string, options: SchedulerRunOptions): Promise<ProjectOperationResult> {
@@ -56,6 +61,21 @@ export class Scheduler {
       results.push(result);
       if (result.integration?.kind === "awaiting_confirmation") return results;
     }
+  }
+
+  public schedulePlanning<T>(planningSessionId: string, operation: () => Promise<T>): Promise<T> {
+    return this.serialize(async () => {
+      this.#activePlanningSessionId = planningSessionId;
+      try {
+        return await operation();
+      } finally {
+        this.#activePlanningSessionId = null;
+      }
+    });
+  }
+
+  public async controlPlanning<T>(operation: () => Promise<T>): Promise<T> {
+    return await operation();
   }
 
   public serialize<T>(operation: () => Promise<T>): Promise<T> {
