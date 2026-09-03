@@ -16,13 +16,16 @@
     "release:artifact": "node scripts/release.mjs artifact",
     "release:publish:rc": "node scripts/release.mjs publish-rc",
     "release:promote": "node scripts/release.mjs promote",
+    "security:check": "node scripts/security-check.mjs",
     "test": "vitest run",
+    "test:e2e": "pnpm build && playwright test",
     "test:watch": "vitest",
     "typecheck": "pnpm -r typecheck",
     "smoke:codex": "pnpm --filter raycoder smoke:codex"
   },
   "devDependencies": {
     "@eslint/js": "^9.35.0",
+    "@playwright/test": "1.62.1",
     "@types/node": "^24.3.0",
     "esbuild": "^0.28.2",
     "eslint": "^9.35.0",

@@ -42,8 +42,11 @@ describe("minimal server", () => {
     const projectRoot = await createRepository();
     const repository = new TicketRepository(":memory:");
     const preflight: PreflightReport = {
+      canServe: true,
+      canExecute: true,
       canStart: true,
       essential: [{ name: "node", ok: true, message: "Node test" }],
+      tools: [{ name: "git", ok: true, message: "Git test" }],
       providers: [{ provider: "fake", executable: true, diagnostics: [] }],
       upcoming: [],
     };
@@ -76,11 +79,11 @@ describe("minimal server", () => {
       expect(tickets.tickets[0]?.integrationAttempt.status).toBe("INTEGRATED");
       const html = await (await fetch(root)).text();
       expect(html).toContain("raycoder");
-      expect(html).toContain("Planning");
+      expect(html).toContain("Open a workspace");
       expect(html).toContain("data-tab=\"dag\"");
-      const inlineScript = html.match(/<script>([\s\S]*?)<\/script>/u)?.[1];
-      expect(inlineScript).toBeDefined();
-      expect(() => new Script(inlineScript ?? "")).not.toThrow();
+      expect(html).toContain('<script type="module" src="/app.js"></script>');
+      const app = await (await fetch(`${root}/app.js`)).text();
+      expect(() => new Script(app)).not.toThrow();
     } finally {
       await new Promise<void>((resolve, reject) => server.close((error) => error === undefined ? resolve() : reject(error)));
       repository.close();
@@ -91,8 +94,11 @@ describe("minimal server", () => {
     const projectRoot = await createRepository();
     const repository = new TicketRepository(":memory:");
     const preflight: PreflightReport = {
+      canServe: true,
+      canExecute: true,
       canStart: true,
       essential: [{ name: "node", ok: true, message: "Node test" }],
+      tools: [{ name: "git", ok: true, message: "Git test" }],
       providers: [{ provider: "fake", executable: true, diagnostics: [] }],
       upcoming: [],
     };
@@ -145,8 +151,11 @@ describe("minimal server", () => {
     const project = projects.list()[0]?.project;
     if (project === undefined) throw new Error("Expected registered project");
     const preflight: PreflightReport = {
+      canServe: true,
+      canExecute: true,
       canStart: true,
       essential: [{ name: "node", ok: true, message: "Node test" }],
+      tools: [{ name: "git", ok: true, message: "Git test" }],
       providers: [{ provider: "fake", executable: true, diagnostics: [] }],
       upcoming: [],
     };

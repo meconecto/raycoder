@@ -17,6 +17,8 @@ export * from "./process.js";
 export * from "./project-verifier.js";
 export * from "./project-orchestrator.js";
 export * from "./project-manager.js";
+export * from "./project-cleanup.js";
+export * from "./project-inspector.js";
 export * from "./project-registry.js";
 export * from "./project-runtime.js";
 export * from "./recovery.js";
@@ -26,4 +28,4 @@ export * from "./skill-bundle-manager.js";
 export * from "./ticket-actions.js";
 export * from "./ticket-repository.js";
 
-export const RAYCODER_VERSION = "1.0.0-rc.2";
+export const RAYCODER_VERSION = "1.0.0-rc.3";

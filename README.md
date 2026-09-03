@@ -2,23 +2,24 @@
 
 raycoder is a local, browser-based orchestrator for coding agents. Its engine gives every ticket an isolated Git workspace, records lifecycle and dependency history in SQLite, integrates reviewed work against the current base branch, and recovers conservatively after crashes.
 
-The `1.0.0-rc.2` candidate covers the complete V1 workflow: multi-project runtimes, versioned planning artifacts, confirmed dependency DAGs, isolated ticket workspaces, structured review, journaled integration through `DONE`, crash recovery, project settings, optional Engram memory, bundled skills, and workspace-aware preview.
+The `1.0.0-rc.3` candidate adds a projectless application host, single-instance startup from any directory, inspected project onboarding, provider-independent UI startup, safe cleanup, and a static browser UI to the complete V1 workflow.
 
 ## Install and run
 
-raycoder is distributed as one npm package and requires Node.js 24 LTS or newer and Git. To
-validate a checkout locally, build a tarball and exercise exactly what will be published:
+raycoder is distributed as one npm package and requires Node.js 24 LTS or newer. Git is
+required when a project is opened or created, but the selector can start without it:
 
 ```bash
-pnpm build
-pnpm --filter raycoder pack --pack-destination ./artifacts
-npx --package ./artifacts/raycoder-1.0.0-rc.2.tgz raycoder --help
-npx --package ./artifacts/raycoder-1.0.0-rc.2.tgz raycoder doctor /path/to/project
+npx raycoder@next
+npx raycoder@next /path/to/project --port 4317 --no-open
+npx raycoder@next doctor /path/to/project
+npx raycoder@next cleanup --global
 ```
 
 `raycoder doctor` checks Node, the bundled Codex runtime, ChatGPT authentication and the
-optional Engram MCP setup, and the target Git repository without creating project metadata. Start the local application with
-`npx raycoder /path/to/project`.
+optional Engram MCP setup, and an optional target path without creating project metadata. With
+no path, `npx raycoder` opens the project selector. The UI remains available when no provider
+can execute agents; execution controls show the actionable preflight diagnosis instead.
 
 The package also exposes the provider-neutral runtime API from `raycoder`; the executable
 and the runtime are built from the same package artifact and do not depend on unpublished
@@ -33,6 +34,7 @@ pnpm install
 pnpm build
 pnpm test
 pnpm lint
+pnpm test:e2e
 pnpm package:smoke
 pnpm package:npx-smoke
 pnpm dogfood:v1
@@ -62,11 +64,11 @@ pnpm smoke:codex
 
 It creates and uses a disposable Git fixture; it never runs against the raycoder repository.
 
-Project metadata lives in `.raycoder/` and is excluded through the repository-local Git exclude file. Global configuration lives in `~/.raycoder/`. Both locations are removed only through an explicit user cleanup.
+Project metadata lives in `.raycoder/` and is excluded through the repository-local Git exclude file. Global configuration, project registry and the active-instance descriptor live in `~/.raycoder/`. Both locations are removed only through previewed, explicitly confirmed cleanup operations.
 
 ## Local API
 
-Projects are catalogued globally and opened as independent runtimes. The API is rooted at
+Projects are inspected before mutation, catalogued globally and opened as independent runtimes. The API is rooted at
 `/api/projects/:projectId/` and exposes tickets, dependencies, history, provider sessions,
 capabilities and lifecycle actions. Mutations are serialized per project; different projects
 can run concurrently. The legacy single-project diagnostic endpoints remain available for
@@ -91,7 +93,7 @@ pnpm dogfood:v1
 
 `release:publish:rc` publishes that tarball under npm's `next` tag. After the exact RC
 artifact is accepted, `release:promote` moves npm's `latest` tag to that same immutable
-version. npm versions cannot be renamed, so this promotes `1.0.0-rc.2` to the stable channel
+version. npm versions cannot be renamed, so this promotes `1.0.0-rc.3` to the stable channel
 without rebuilding it; a separately named `1.0.0` would necessarily be a different package
 artifact.
 

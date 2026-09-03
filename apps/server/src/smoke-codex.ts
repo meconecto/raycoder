@@ -16,7 +16,7 @@ import {
 async function main(): Promise<void> {
   const adapter = new CodexAgentAdapter();
   const preflight = await new PreflightService([adapter]).run();
-  if (!preflight.canStart) {
+  if (!preflight.canExecute) {
     console.log("SKIPPED real Codex smoke test: external runtime or active ChatGPT authentication is unavailable.");
     for (const provider of preflight.providers) {
       for (const diagnostic of provider.diagnostics) console.log(`- ${diagnostic.message}`);

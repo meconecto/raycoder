@@ -54,17 +54,37 @@ describe("Codex preflight", () => {
 describe("preflight aggregation", () => {
   it("blocks on an essential requirement or when no included provider is executable", async () => {
     const unavailable = adapter({ provider: "codex", executable: false, diagnostics: [] });
-    expect((await new PreflightService([unavailable], "24.20.0").run()).canStart).toBe(false);
+    const unavailableReport = await new PreflightService([unavailable], "24.20.0", new FixtureRunner("")).run();
+    expect(unavailableReport).toMatchObject({ canServe: true, canExecute: false, canStart: false });
     const available = adapter({ provider: "codex", executable: true, diagnostics: [] });
-    expect((await new PreflightService([available], "22.23.2").run()).canStart).toBe(false);
+    expect((await new PreflightService([available], "22.23.2", new FixtureRunner("")).run())).toMatchObject({
+      canServe: false,
+      canExecute: false,
+      canStart: false,
+    });
   });
 
   it("does not let an unavailable individual provider block another executable provider", async () => {
     const report = await new PreflightService([
       adapter({ provider: "codex", executable: false, diagnostics: [] }),
       adapter({ provider: "future-test-provider", executable: true, diagnostics: [] }),
-    ], "24.20.0").run();
+    ], "24.20.0", new FixtureRunner("")).run();
     expect(report.canStart).toBe(true);
+    expect(report.canServe).toBe(true);
+    expect(report.canExecute).toBe(true);
+    expect(report.tools).toEqual([{ name: "git", ok: true, message: "codex-cli 0.152.1" }]);
     expect(report.upcoming).toEqual(["claude", "cursor-agent", "opencode"]);
+  });
+
+  it("reports Git separately without preventing the projectless UI from starting", async () => {
+    const gitUnavailable: ProcessRunner = { async run() { throw new Error("git missing"); } };
+    const report = await new PreflightService([
+      adapter({ provider: "codex", executable: true, diagnostics: [] }),
+    ], "24.20.0", gitUnavailable).run();
+    expect(report).toMatchObject({
+      canServe: true,
+      canExecute: true,
+      tools: [{ name: "git", ok: false, message: expect.stringContaining("git missing") }],
+    });
   });
 });

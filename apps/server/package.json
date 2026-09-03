@@ -1,6 +1,6 @@
 {
   "name": "raycoder",
-  "version": "1.0.0-rc.2",
+  "version": "1.0.0-rc.3",
   "description": "A local, recoverable coding-agent orchestrator",
   "license": "AGPL-3.0-only",
   "type": "module",
@@ -28,8 +28,7 @@
     "smoke:codex": "node --enable-source-maps dist/smoke-codex.js"
   },
   "dependencies": {
-    "@openai/codex-sdk": "^0.152.1",
-    "better-sqlite3": "^12.2.0"
+    "@openai/codex-sdk": "^0.152.1"
   },
   "devDependencies": {
     "@raycoder/core": "workspace:*",

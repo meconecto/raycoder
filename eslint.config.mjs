@@ -3,7 +3,7 @@ import tseslint from "typescript-eslint";
 
 export default tseslint.config(
   {
-    ignores: ["**/dist/**", "**/coverage/**", "**/node_modules/**", "**/.raycoder/**"],
+    ignores: ["**/dist/**", "**/coverage/**", "**/node_modules/**", "**/.raycoder/**", "apps/server/src/assets/ui/**"],
   },
   eslint.configs.recommended,
   ...tseslint.configs.recommended,
@@ -13,6 +13,10 @@ export default tseslint.config(
       globals: {
         console: "readonly",
         process: "readonly",
+        fetch: "readonly",
+        URL: "readonly",
+        setTimeout: "readonly",
+        clearTimeout: "readonly",
       },
     },
   },

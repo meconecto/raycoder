@@ -1,23 +1,73 @@
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { execFileSync, spawn } from "node:child_process";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const workspaceRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const packageRoot = join(workspaceRoot, "apps", "server");
 const manifest = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8"));
 const fixture = mkdtempSync(join(tmpdir(), "raycoder-npx-"));
+const packageOutput = mkdtempSync(join(tmpdir(), "raycoder-npx-package-"));
+const isolatedHome = mkdtempSync(join(tmpdir(), "raycoder-npx-home-"));
+const environment = {
+  ...process.env,
+  HOME: isolatedHome,
+  USERPROFILE: isolatedHome,
+  npm_config_cache: join(isolatedHome, "npm-cache"),
+  npm_config_foreground_scripts: "true",
+};
+const suppliedTarball = process.argv[2] === undefined ? undefined : resolve(workspaceRoot, process.argv[2]);
+let serverProcess;
 
 try {
-  exec("pnpm", ["build"], workspaceRoot);
-  exec("pnpm", ["pack", "--pack-destination", fixture], packageRoot);
-  const tarball = join(fixture, `raycoder-${manifest.version}.tgz`);
-  const output = npm(["exec", "--yes", `--package=${tarball}`, "--", "raycoder", "--version"], fixture).trim();
-  if (output !== manifest.version) throw new Error(`Unexpected npx version: ${output}`);
-  console.log(`PASS npx installed and executed raycoder ${output}`);
+  if (suppliedTarball === undefined) {
+    exec("pnpm", ["build"], workspaceRoot);
+    exec("pnpm", ["pack", "--pack-destination", packageOutput], packageRoot);
+  }
+  const tarball = suppliedTarball ?? join(packageOutput, `raycoder-${manifest.version}.tgz`);
+  const version = npm(["exec", "--yes", `--package=${tarball}`, "--", "raycoder", "--version"], fixture, environment).trim();
+  if (version !== manifest.version) throw new Error(`Unexpected npx version: ${version}`);
+
+  serverProcess = spawnNpm(["exec", "--yes", `--package=${tarball}`, "--", "raycoder", "--no-open", "--port", "0"], fixture, environment);
+  const firstOutput = await waitForOutput(serverProcess, /raycoder listening at (http:\/\/127\.0\.0\.1:\d+\/)/u, 30_000);
+  const url = firstOutput.match(/raycoder listening at (http:\/\/127\.0\.0\.1:\d+\/)/u)?.[1];
+  if (url === undefined) throw new Error(`Could not read server URL:\n${firstOutput}`);
+
+  const [html, preflight] = await Promise.all([
+    fetch(url).then(async (response) => await response.text()),
+    fetch(new URL("/api/preflight", url)).then(async (response) => await response.json()),
+  ]);
+  if (!html.includes("Choose where to work") || !html.includes('src="/app.js"')) throw new Error("Packaged UI was not served");
+  if (preflight.canServe !== true || typeof preflight.canExecute !== "boolean") throw new Error("Packaged preflight contract is invalid");
+  if (existsSync(join(fixture, ".raycoder"))) throw new Error("Starting raycoder created .raycoder metadata in the invocation directory");
+
+  const reused = npm(["exec", "--yes", `--package=${tarball}`, "--", "raycoder", "--no-open", "--port", "0"], fixture, environment);
+  if (!reused.includes("Reusing raycoder") || !reused.includes(url)) throw new Error(`Second invocation did not reuse the instance:\n${reused}`);
+
+  const recordPath = join(isolatedHome, ".raycoder", "instance.json");
+  const record = JSON.parse(readFileSync(recordPath, "utf8"));
+  const shutdown = await fetch(new URL("/api/instance/shutdown", url), {
+    method: "POST",
+    headers: { "x-raycoder-instance-nonce": record.nonce },
+  });
+  if (shutdown.status !== 202) throw new Error(`Authenticated shutdown returned HTTP ${shutdown.status}`);
+  await waitForExit(serverProcess, 15_000);
+  serverProcess = undefined;
+  if (existsSync(recordPath)) throw new Error("Clean shutdown left the instance descriptor behind");
+  console.log(`PASS npx tarball server ${manifest.version}: UI, preflight, CWD isolation, reuse and shutdown`);
 } finally {
+  if (serverProcess !== undefined && serverProcess.exitCode === null) {
+    try {
+      const record = JSON.parse(readFileSync(join(isolatedHome, ".raycoder", "instance.json"), "utf8"));
+      process.kill(record.pid, "SIGTERM");
+    } catch {
+      serverProcess.kill();
+    }
+  }
   rmSync(fixture, { recursive: true, force: true });
+  rmSync(packageOutput, { recursive: true, force: true });
+  rmSync(isolatedHome, { recursive: true, force: true });
 }
 
 function exec(command, args, cwd) {
@@ -28,8 +78,50 @@ function exec(command, args, cwd) {
   execFileSync(command, args, { cwd, stdio: "inherit" });
 }
 
-function npm(args, cwd) {
+function npm(args, cwd, env) {
   return process.platform === "win32"
-    ? execFileSync(process.env.ComSpec ?? "cmd.exe", ["/d", "/s", "/c", "npm.cmd", ...args], { cwd, encoding: "utf8" })
-    : execFileSync("npm", args, { cwd, encoding: "utf8" });
+    ? execFileSync(process.env.ComSpec ?? "cmd.exe", ["/d", "/s", "/c", "npm.cmd", ...args], { cwd, env, encoding: "utf8" })
+    : execFileSync("npm", args, { cwd, env, encoding: "utf8" });
+}
+
+function spawnNpm(args, cwd, env) {
+  const child = process.platform === "win32"
+    ? spawn(process.env.ComSpec ?? "cmd.exe", ["/d", "/s", "/c", "npm.cmd", ...args], { cwd, env, stdio: ["ignore", "pipe", "pipe"] })
+    : spawn("npm", args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  return child;
+}
+
+function waitForOutput(child, pattern, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    let output = "";
+    const append = (chunk) => {
+      output += chunk;
+      if (pattern.test(output)) finish(resolve, output);
+    };
+    const timer = setTimeout(() => finish(reject, new Error(`Timed out waiting for npx server:\n${output}`)), timeoutMs);
+    const onExit = (code) => finish(reject, new Error(`npx server exited with ${code}:\n${output}`));
+    const finish = (callback, value) => {
+      clearTimeout(timer);
+      child.stdout.off("data", append);
+      child.stderr.off("data", append);
+      child.off("exit", onExit);
+      callback(value);
+    };
+    child.stdout.on("data", append);
+    child.stderr.on("data", append);
+    child.once("exit", onExit);
+  });
+}
+
+function waitForExit(child, timeoutMs) {
+  if (child.exitCode !== null) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("Timed out waiting for clean raycoder shutdown")), timeoutMs);
+    child.once("exit", () => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
 }

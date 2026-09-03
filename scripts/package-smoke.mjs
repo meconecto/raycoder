@@ -1,23 +1,26 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const workspaceRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const packageRoot = join(workspaceRoot, "apps", "server");
 const fixture = mkdtempSync(join(tmpdir(), "raycoder-package-"));
 const packageManifest = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8"));
+const suppliedTarball = process.argv[2] === undefined ? undefined : resolve(workspaceRoot, process.argv[2]);
 
 try {
-  exec("pnpm", ["build"], workspaceRoot);
-  exec("pnpm", ["pack", "--pack-destination", fixture], packageRoot);
-  const tarball = join(fixture, `raycoder-${packageManifest.version}.tgz`);
+  if (suppliedTarball === undefined) {
+    exec("pnpm", ["build"], workspaceRoot);
+    exec("pnpm", ["pack", "--pack-destination", fixture], packageRoot);
+  }
+  const tarball = suppliedTarball ?? join(fixture, `raycoder-${packageManifest.version}.tgz`);
   writeFileSync(join(fixture, "package.json"), JSON.stringify({
     private: true,
     dependencies: { raycoder: `file:${tarball}` },
   }), "utf8");
-  writeFileSync(join(fixture, "pnpm-workspace.yaml"), "allowBuilds:\n  better-sqlite3: true\n", "utf8");
+  writeFileSync(join(fixture, "pnpm-workspace.yaml"), "packages: []\n", "utf8");
   exec("pnpm", ["install"], fixture);
   const cli = join(fixture, "node_modules", "raycoder", "dist", "cli.js");
   const version = execFileSync(process.execPath, [cli, "--version"], { cwd: fixture, encoding: "utf8" }).trim();
@@ -27,7 +30,7 @@ try {
   exec("git", ["init", "-b", "main"], fixture);
   const doctor = spawnSync(process.execPath, [cli, "doctor", fixture], { cwd: fixture, encoding: "utf8" });
   const doctorOutput = `${doctor.stdout}\n${doctor.stderr}`;
-  if (!doctorOutput.includes("Git repository") || !doctorOutput.includes(" on main")) {
+  if (!doctorOutput.includes("git_repository") || !doctorOutput.includes("branch: main")) {
     throw new Error(`Packaged CLI could not inspect a clean Git fixture:\n${doctorOutput}`);
   }
   const installedPackage = JSON.parse(readFileSync(join(fixture, "node_modules", "raycoder", "package.json"), "utf8"));

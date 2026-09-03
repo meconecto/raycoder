@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const workspaceRoot = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -10,18 +10,21 @@ const packageManifest = JSON.parse(readFileSync(join(packageRoot, "package.json"
 const fixtureRoot = mkdtempSync(join(tmpdir(), "raycoder-dogfood-"));
 const projectRoot = join(fixtureRoot, "raycoder-copy");
 const installedRoot = join(fixtureRoot, "installed-package");
+const suppliedTarball = process.argv[2] === undefined ? undefined : resolve(workspaceRoot, process.argv[2]);
 let succeeded = false;
 
 try {
   mkdirSync(installedRoot, { recursive: true });
-  exec("pnpm", ["build"], workspaceRoot);
-  exec("pnpm", ["pack", "--pack-destination", installedRoot], packageRoot);
-  const tarball = join(installedRoot, `raycoder-${packageManifest.version}.tgz`);
+  if (suppliedTarball === undefined) {
+    exec("pnpm", ["build"], workspaceRoot);
+    exec("pnpm", ["pack", "--pack-destination", installedRoot], packageRoot);
+  }
+  const tarball = suppliedTarball ?? join(installedRoot, `raycoder-${packageManifest.version}.tgz`);
   writeFileSync(join(installedRoot, "package.json"), JSON.stringify({
     private: true,
     dependencies: { raycoder: `file:${tarball}` },
   }), "utf8");
-  writeFileSync(join(installedRoot, "pnpm-workspace.yaml"), "allowBuilds:\n  better-sqlite3: true\n", "utf8");
+  writeFileSync(join(installedRoot, "pnpm-workspace.yaml"), "packages: []\n", "utf8");
   exec("pnpm", ["install"], installedRoot);
   exec("git", ["clone", "--no-local", workspaceRoot, projectRoot], fixtureRoot);
   exec("git", ["config", "user.name", "raycoder dogfood"], projectRoot);
