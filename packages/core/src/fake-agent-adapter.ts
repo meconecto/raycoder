@@ -107,7 +107,15 @@ export class FakeAgentAdapter implements AgentAdapter {
       await writeFile(filePath, contents, "utf8");
       yield { type: "file_change", timestamp: timestamp(), paths: [filePath], summary: "deterministic fixture change" };
       await this.#runner.run("git", ["add", "--", this.#options.fileName], { cwd: state.workspace });
-      const commit = await this.#runner.run("git", ["commit", "-m", this.#options.commitMessage], { cwd: state.workspace });
+      const commit = await this.#runner.run("git", [
+        "-c",
+        "user.name=raycoder",
+        "-c",
+        "user.email=raycoder@local.invalid",
+        "commit",
+        "-m",
+        this.#options.commitMessage,
+      ], { cwd: state.workspace });
       yield {
         type: "command",
         timestamp: timestamp(),
