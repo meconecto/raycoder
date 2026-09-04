@@ -542,9 +542,9 @@ setInterval(() => {
 
 setInterval(() => {
   if (!state.project || state.tab !== "planning") return;
-  const editing = content.contains(document.activeElement) && ["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName);
   void json(`${base()}/planning`).then((planning) => {
     state.planning = planning;
+    const editing = content.contains(document.activeElement) && ["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName);
     if (!editing) renderPlanning();
   }).catch((error) => { errorBox.textContent = error.message; });
 }, 1000);

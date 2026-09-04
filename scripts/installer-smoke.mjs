@@ -81,7 +81,23 @@ try {
     || preserved.metadata !== "preserved-project-metadata\n"
     || preserved.credentials !== "credential-sentinel-must-not-change\n"
   ) throw new Error(`Uninstall changed preserved data: ${JSON.stringify(preserved)}`);
-  console.log(`PASS user-local installer ${packageManifest.version}: packaged install, stable launch and preserving uninstall`);
+
+  const emptyInstallRoot = join(isolatedHome, ".raycoder-empty");
+  exec(process.execPath, [
+    bootstrapCli,
+    "install",
+    "--root",
+    emptyInstallRoot,
+    "--package",
+    tarball,
+    "--no-shortcut",
+    "--no-path",
+  ], fixture, environment);
+  const emptyLauncher = join(emptyInstallRoot, "bin", process.platform === "win32" ? "raycoder.cmd" : "raycoder");
+  exec(emptyLauncher, ["uninstall", "--root", emptyInstallRoot, "--yes"], fixture, environment);
+  if (existsSync(emptyInstallRoot)) throw new Error(`Uninstall left an empty installation root: ${emptyInstallRoot}`);
+
+  console.log(`PASS user-local installer ${packageManifest.version}: packaged install, stable launch, preserving uninstall and residue-free removal`);
 } finally {
   rmSync(fixture, { recursive: true, force: true });
 }
