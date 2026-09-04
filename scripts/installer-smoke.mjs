@@ -43,8 +43,8 @@ try {
     throw new Error(`Installer did not report success:\n${installOutput}`);
   }
 
-  const launcher = join(installRoot, "bin", "raycoder-launcher.mjs");
-  const version = exec(process.execPath, [launcher, "--version"], fixture, environment).trim();
+  const launcher = join(installRoot, "bin", process.platform === "win32" ? "raycoder.cmd" : "raycoder");
+  const version = exec(launcher, ["--version"], fixture, environment).trim();
   if (version !== packageManifest.version) throw new Error(`Stable launcher reported ${version}`);
   const pointer = JSON.parse(readFileSync(join(installRoot, "current.json"), "utf8"));
   if (pointer.currentVersion !== packageManifest.version || pointer.previousVersion !== null) {
@@ -61,7 +61,7 @@ try {
   writeFileSync(join(installRoot, "projects", "metadata.txt"), "preserved-project-metadata\n", "utf8");
   writeFileSync(join(installRoot, "credentials.json"), "credential-sentinel-must-not-change\n", "utf8");
 
-  const uninstallOutput = exec(process.execPath, [launcher, "uninstall", "--root", installRoot, "--yes"], fixture, environment);
+  const uninstallOutput = exec(launcher, ["uninstall", "--root", installRoot, "--yes"], fixture, environment);
   if (!uninstallOutput.includes("Configuration and project data were preserved.")) {
     throw new Error(`Uninstall did not report preservation:\n${uninstallOutput}`);
   }
@@ -95,7 +95,7 @@ function platformShortcut(home) {
 }
 
 function exec(command, args, cwd, env) {
-  if (process.platform === "win32" && (command === "pnpm" || command === "npm")) {
+  if (process.platform === "win32" && (command === "pnpm" || command === "npm" || command.endsWith(".cmd"))) {
     return execFileSync(process.env.ComSpec ?? "cmd.exe", ["/d", "/s", "/c", command, ...args], {
       cwd,
       env,

@@ -210,8 +210,11 @@ export class UserLocalInstaller {
       if (manifest === null) return { removedPaths: [], preservedPaths: inventory.preservedPaths };
       if (manifest?.pathManaged === true) await this.#system.removeFromUserPath(join(this.root, "bin"));
       if (manifest?.shortcutCreated === true) await this.#removeShortcut();
+      const windowsCommandLauncher = join(this.root, "bin", "raycoder.cmd");
+      const commandLauncherWillFinishRemoval = this.#platform === "win32"
+        && sameWindowsPath(this.#environment.RAYCODER_WINDOWS_CMD_LAUNCHER, windowsCommandLauncher);
       const ownedInsideRoot = [
-        ...this.#launcherPaths(),
+        ...this.#launcherPaths().filter((path) => !commandLauncherWillFinishRemoval || path !== windowsCommandLauncher),
         join(this.root, "versions"),
         join(this.root, "staging"),
         join(this.root, "current.json"),
@@ -223,10 +226,14 @@ export class UserLocalInstaller {
         await rm(path, { recursive: true, force: true });
         removedPaths.push(path);
       }
-      try {
-        await rmdir(join(this.root, "bin"));
-      } catch (error) {
-        if (!["ENOENT", "ENOTEMPTY", "EEXIST"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
+      if (commandLauncherWillFinishRemoval) {
+        if (await exists(windowsCommandLauncher)) removedPaths.push(windowsCommandLauncher);
+      } else {
+        try {
+          await rmdir(join(this.root, "bin"));
+        } catch (error) {
+          if (!["ENOENT", "ENOTEMPTY", "EEXIST"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
+        }
       }
       const shortcut = this.#shortcutPath();
       if (inventory.ownedPaths.includes(shortcut)) removedPaths.push(shortcut);
@@ -361,7 +368,8 @@ export class UserLocalInstaller {
     await writeFile(shellLauncher, `#!/bin/sh\nexec node "$(dirname "$0")/raycoder-launcher.mjs" "$@"\n`, { encoding: "utf8", mode: 0o755 });
     await chmod(shellLauncher, 0o755);
     if (this.#platform === "win32") {
-      await writeFile(join(bin, "raycoder.cmd"), "@echo off\r\nnode \"%~dp0raycoder-launcher.mjs\" %*\r\n", "utf8");
+      const commandLauncher = "@echo off\r\nsetlocal\r\nset \"RAYCODER_WINDOWS_CMD_LAUNCHER=%~f0\"\r\nnode \"%~dp0raycoder-launcher.mjs\" %*\r\nset \"RAYCODER_EXIT_CODE=%ERRORLEVEL%\"\r\nif /I \"%~1\"==\"uninstall\" if \"%RAYCODER_EXIT_CODE%\"==\"0\" goto raycoder_self_delete\r\nexit /b %RAYCODER_EXIT_CODE%\r\n:raycoder_self_delete\r\n(goto) 2>nul & del /f /q \"%~f0\" >nul 2>&1 & rd \"%~dp0\" >nul 2>&1\r\n";
+      await writeFile(join(bin, "raycoder.cmd"), commandLauncher, "utf8");
     }
   }
 
@@ -728,6 +736,10 @@ function shellQuote(value: string): string {
 
 function desktopQuote(value: string): string {
   return `"${value.replace(/["`$\\]/gu, "\\$&")}"`;
+}
+
+function sameWindowsPath(left: string | undefined, right: string): boolean {
+  return left !== undefined && resolve(left).toLowerCase() === resolve(right).toLowerCase();
 }
 
 function pathScript(operation: "add" | "remove", binDirectory: string): string {
