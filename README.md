@@ -2,7 +2,7 @@
 
 raycoder is a local, browser-based orchestrator for coding agents. Its engine gives every ticket an isolated Git workspace, records lifecycle and dependency history in SQLite, integrates reviewed work against the current base branch, and recovers conservatively after crashes.
 
-The `1.0.0-rc.3` candidate adds a projectless application host, single-instance startup from any directory, inspected project onboarding, provider-independent UI startup, safe cleanup, and a static browser UI to the complete V1 workflow.
+The `1.0.0-rc.4` candidate adds durable conversational planning, structured SPEC and ticket revisions, recoverable generation sessions, confirmed DAG creation, and an atomic user-local installer with update, rollback, and conservative uninstall.
 
 ## Install and run
 
@@ -119,7 +119,7 @@ pnpm dogfood:rc4
 
 `release:publish:rc` publishes that tarball under npm's `next` tag. After the exact RC
 artifact is accepted, `release:promote` moves npm's `latest` tag to that same immutable
-version. npm versions cannot be renamed, so this promotes `1.0.0-rc.3` to the stable channel
+version. npm versions cannot be renamed, so this promotes `1.0.0-rc.4` to the stable channel
 without rebuilding it; a separately named `1.0.0` would necessarily be a different package
 artifact.
 
