@@ -104,42 +104,10 @@ MIT-licensed snapshot of `mattpocock/skills` is copied into each project's
 untracked `.raycoder/skills` directory. Engram is optional; install it separately and run
 `engram setup codex` to expose durable memory over MCP.
 
-## Release candidate workflow
+## Release pipeline
 
-Create the immutable local candidate and validate both the executable and full installed
-V1 flow before publishing:
-
-```bash
-pnpm release:artifact
-pnpm package:npx-smoke
-pnpm installer:smoke
-pnpm dogfood:v1
-pnpm dogfood:rc4
-```
-
-`release:publish:rc` publishes that tarball under npm's `next` tag. After the exact RC
-artifact is accepted, `release:promote` moves npm's `latest` tag to that same immutable
-version. npm versions cannot be renamed, so this promotes `1.0.0-rc.6` to the stable channel
-without rebuilding it; a separately named `1.0.0` would necessarily be a different package
-artifact.
-
-Promotion is deliberately local and interactive. Confirm that `apps/server/package.json`
-still names the accepted, already-published RC, then validate the npm session without exposing
-credentials:
-
-```bash
-npm whoami
-# If the session is missing or expired:
-npm login --auth-type=web
-pnpm release:promote
-pnpm release:verify-tags
-```
-
-Do not print npm configuration, inspect authentication files, pass a token on the command
-line, or copy a token into the repository or CI. npm owns the local web-login session;
-raycoder never reads or stores its credential. `release:promote` first requires `next` to
-point at the manifest version, moves `latest`, and then compares both channels' version,
-integrity and shasum. `release:verify-tags` repeats the final comparison without mutating npm.
+Maintainers should follow the [release runbook](docs/releasing.md) for the complete RC,
+Trusted Publisher, artifact verification, recovery, and stable-promotion process.
 
 ## License
 
