@@ -202,7 +202,7 @@ export class UserLocalInstaller {
   }
 
   public async uninstall(): Promise<UninstallResult> {
-    return await this.#withLock(async () => {
+    const result = await this.#withLock(async () => {
       const pointer = await this.#readCurrent();
       await this.#assertInactive("uninstall", pointer?.currentVersion ?? "unknown");
       const manifest = await this.#readManifest();
@@ -239,6 +239,8 @@ export class UserLocalInstaller {
       if (inventory.ownedPaths.includes(shortcut)) removedPaths.push(shortcut);
       return { removedPaths, preservedPaths: inventory.preservedPaths };
     });
+    await removeEmptyDirectory(this.root);
+    return result;
   }
 
   async #installUnlocked(
@@ -368,7 +370,7 @@ export class UserLocalInstaller {
     await writeFile(shellLauncher, `#!/bin/sh\nexec node "$(dirname "$0")/raycoder-launcher.mjs" "$@"\n`, { encoding: "utf8", mode: 0o755 });
     await chmod(shellLauncher, 0o755);
     if (this.#platform === "win32") {
-      const commandLauncher = "@echo off\r\nsetlocal\r\nset \"RAYCODER_WINDOWS_CMD_LAUNCHER=%~f0\"\r\nnode \"%~dp0raycoder-launcher.mjs\" %*\r\nset \"RAYCODER_EXIT_CODE=%ERRORLEVEL%\"\r\nif /I \"%~1\"==\"uninstall\" if \"%RAYCODER_EXIT_CODE%\"==\"0\" goto raycoder_self_delete\r\nexit /b %RAYCODER_EXIT_CODE%\r\n:raycoder_self_delete\r\n(goto) 2>nul & del /f /q \"%~f0\" >nul 2>&1 & rd \"%~dp0\" >nul 2>&1\r\n";
+      const commandLauncher = "@echo off\r\nsetlocal\r\nset \"RAYCODER_WINDOWS_CMD_LAUNCHER=%~f0\"\r\nnode \"%~dp0raycoder-launcher.mjs\" %*\r\nset \"RAYCODER_EXIT_CODE=%ERRORLEVEL%\"\r\nif /I \"%~1\"==\"uninstall\" if \"%RAYCODER_EXIT_CODE%\"==\"0\" goto raycoder_self_delete\r\nexit /b %RAYCODER_EXIT_CODE%\r\n:raycoder_self_delete\r\n(goto) 2>nul & del /f /q \"%~f0\" >nul 2>&1 & rd \"%~dp0\" >nul 2>&1 & rd \"%~dp0..\" >nul 2>&1 & cmd /d /c exit 0\r\n";
       await writeFile(join(bin, "raycoder.cmd"), commandLauncher, "utf8");
     }
   }
@@ -683,6 +685,14 @@ async function exists(path: string): Promise<boolean> {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
     throw error;
+  }
+}
+
+async function removeEmptyDirectory(path: string): Promise<void> {
+  try {
+    await rmdir(path);
+  } catch (error) {
+    if (!["ENOENT", "ENOTEMPTY", "EEXIST"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
   }
 }
 
