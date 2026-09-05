@@ -299,6 +299,17 @@ export const migrations: readonly Migration[] = [
         ON workspace_preparation_attempts(integration_attempt_id, created_at);
     `,
   },
+  {
+    version: 7,
+    name: "planning_retry_traceability",
+    sql: `
+      ALTER TABLE planning_sessions ADD COLUMN retry_of_session_id TEXT
+        REFERENCES planning_sessions(id) ON DELETE SET NULL;
+
+      CREATE INDEX planning_sessions_retry
+        ON planning_sessions(retry_of_session_id, created_at, id);
+    `,
+  },
 ] as const;
 
 export function migrate(database: SqliteDatabase): void {

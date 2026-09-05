@@ -10,6 +10,7 @@ import type {
   PlanningThread,
   TicketRepository,
 } from "./ticket-repository.js";
+import { sanitizeOutput } from "./workspace-preparation.js";
 
 export interface PlannedTicket {
   readonly id: string;
@@ -288,6 +289,28 @@ export class PlanningPipeline {
     return session;
   }
 
+  public async prepareRetry(failedSessionId: string): Promise<PlanningSession> {
+    this.#assertNoPendingOperation();
+    const failed = this.#repository.getPlanningSession(failedSessionId);
+    if (failed.status !== "error") {
+      throw new PlanningInvalidStateError(`Planning session ${failed.id} is ${failed.status}, not error`);
+    }
+    const capabilities = await this.#adapter.capabilities();
+    this.#assertNoPendingOperation();
+    const thread = this.#ensureProviderThread(capabilities.provider);
+    if (thread.id !== failed.threadId) {
+      throw new PlanningInvalidStateError("The failed planning session belongs to a different thread");
+    }
+    return this.#repository.createPlanningSession({
+      id: randomUUID(),
+      threadId: failed.threadId,
+      provider: capabilities.provider,
+      stage: failed.stage,
+      request: readPlanningRequest(failed.request),
+      retryOfSessionId: failed.id,
+    });
+  }
+
   public async runSession(sessionId: string): Promise<PlanningRunResult> {
     let persisted = this.#repository.getPlanningSession(sessionId);
     if (persisted.status === "cancelled") return { session: persisted, artifact: null };
@@ -322,7 +345,10 @@ export class PlanningPipeline {
       const assistantMessages: PlanningMessage[] = [];
       let completed = false;
       for await (const event of this.#adapter.send(adapterSession, this.#promptFor(persisted, request))) {
-        this.#repository.appendPlanningEvent(sessionId, event);
+        const durableEvent = event.type === "error" || event.type === "warning"
+          ? { ...event, message: sanitizeOutput(event.message) }
+          : event;
+        this.#repository.appendPlanningEvent(sessionId, durableEvent);
         if (event.type === "assistant_message") {
           assistantMessages.push(this.#repository.appendPlanningMessage(
             thread.id,
@@ -358,7 +384,7 @@ export class PlanningPipeline {
         this.#repository.upsertPlanningThread({ ...thread, status: "idle", updatedAt: completedAt });
         throw new PlanningCancelledError();
       }
-      const detail = error instanceof Error ? error.message : String(error);
+      const detail = sanitizeOutput(error instanceof Error ? error.message : String(error));
       const code = error instanceof PlanningGenerationError && error.providerCode !== null
         ? error.providerCode
         : "planning.generation_failed";

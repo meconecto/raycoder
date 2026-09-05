@@ -7,6 +7,13 @@ import { integrationModes, type IntegrationMode } from "./domain.js";
 export const agentStages = ["planning", "specification", "ticketing", "implementation", "review"] as const;
 export type AgentStage = (typeof agentStages)[number];
 export type ReviewMode = "self" | "independent";
+export type UiLocale = "auto" | "es" | "en";
+export type UiTheme = "system" | "light" | "dark";
+
+export interface UiPreferences {
+  readonly locale: UiLocale;
+  readonly theme: UiTheme;
+}
 
 export interface AgentStageConfig {
   readonly provider: string;
@@ -15,16 +22,17 @@ export interface AgentStageConfig {
 }
 
 export interface GlobalConfig {
-  readonly version: 2;
+  readonly version: 3;
   readonly integrationMode: IntegrationMode;
   readonly reviewMode: ReviewMode;
   readonly stages: Readonly<Record<AgentStage, AgentStageConfig>>;
+  readonly ui: UiPreferences;
 }
 
 const defaultStage = (): AgentStageConfig => ({ provider: "codex", model: "default", effort: "medium" });
 
 export const defaultGlobalConfig: GlobalConfig = {
-  version: 2,
+  version: 3,
   integrationMode: "auto",
   reviewMode: "independent",
   stages: {
@@ -34,6 +42,7 @@ export const defaultGlobalConfig: GlobalConfig = {
     implementation: defaultStage(),
     review: defaultStage(),
   },
+  ui: { locale: "auto", theme: "system" },
 };
 
 export class GlobalConfigStore {
@@ -64,10 +73,19 @@ export class GlobalConfigStore {
       return { ...defaultGlobalConfig, integrationMode: candidate.integrationMode };
     }
     if (
-      candidate.version !== 2
+      candidate.version === 2
+      && isIntegrationMode(candidate.integrationMode)
+      && (candidate.reviewMode === "self" || candidate.reviewMode === "independent")
+      && isStageTable(candidate.stages)
+    ) {
+      return { ...(candidate as unknown as Omit<GlobalConfig, "version" | "ui">), version: 3, ui: defaultGlobalConfig.ui };
+    }
+    if (
+      candidate.version !== 3
       || !isIntegrationMode(candidate.integrationMode)
       || (candidate.reviewMode !== "self" && candidate.reviewMode !== "independent")
       || !isStageTable(candidate.stages)
+      || !isUiPreferences(candidate.ui)
     ) throw new Error(`Unsupported raycoder global config at ${this.#path}`);
     return candidate as unknown as GlobalConfig;
   }
@@ -85,6 +103,11 @@ export class GlobalConfigStore {
     return await this.write({ ...current, stages: { ...current.stages, [stage]: config } });
   }
 
+  public async setUiPreferences(ui: UiPreferences): Promise<GlobalConfig> {
+    if (!isUiPreferences(ui)) throw new Error("Invalid raycoder UI preferences");
+    return await this.write({ ...await this.read(), ui });
+  }
+
   public async write(config: GlobalConfig): Promise<GlobalConfig> {
     const parent = dirname(this.#path);
     await mkdir(parent, { recursive: true });
@@ -93,6 +116,13 @@ export class GlobalConfigStore {
     await rename(temporaryPath, this.#path);
     return config;
   }
+}
+
+function isUiPreferences(value: unknown): value is UiPreferences {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const candidate = value as Record<string, unknown>;
+  return (candidate.locale === "auto" || candidate.locale === "es" || candidate.locale === "en")
+    && (candidate.theme === "system" || candidate.theme === "light" || candidate.theme === "dark");
 }
 
 function isIntegrationMode(value: unknown): value is IntegrationMode {

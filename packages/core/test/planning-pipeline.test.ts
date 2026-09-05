@@ -188,6 +188,27 @@ describe("PlanningPipeline", () => {
     repository.close();
   });
 
+  it("retries a failed request without duplicating the user message", async () => {
+    const repository = new TicketRepository(":memory:");
+    const adapter = new FakeAgentAdapter({ failAtTurn: 0 });
+    const pipeline = new PlanningPipeline(repository, adapter, process.cwd());
+    const failed = await pipeline.prepareMessage("Keep this request once");
+    await expect(pipeline.runSession(failed.id)).rejects.toThrow("Scripted fake failure");
+
+    const retry = await pipeline.prepareRetry(failed.id);
+    expect(retry).toMatchObject({
+      status: "idle",
+      retryOfSessionId: failed.id,
+      resumedFromSessionId: null,
+      request: failed.request,
+    });
+    expect(repository.planningMessages(failed.threadId).filter((message) => message.role === "user"))
+      .toMatchObject([{ content: "Keep this request once", sessionId: failed.id }]);
+    await pipeline.cancel(retry.id);
+    await expect(pipeline.prepareRetry(retry.id)).rejects.toThrow(/not error/u);
+    repository.close();
+  });
+
   it("allows only one pending or running planning operation per project", async () => {
     const repository = new TicketRepository(":memory:");
     const pipeline = new PlanningPipeline(repository, new FakeAgentAdapter(), process.cwd());

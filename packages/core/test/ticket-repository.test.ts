@@ -39,12 +39,13 @@ describe("TicketRepository", () => {
       { version: 4, name: "planning_artifacts_threads_and_settings" },
       { version: 5, name: "conversational_planning_sessions_and_traceability" },
       { version: 6, name: "durable_workspace_preparation" },
+      { version: 7, name: "planning_retry_traceability" },
     ]);
     first.close();
 
     const second = new TicketRepository(path);
     expect(second.get("one").status).toBe("READY");
-    expect(second.appliedMigrations()).toHaveLength(6);
+    expect(second.appliedMigrations()).toHaveLength(7);
     second.close();
   });
 
@@ -66,7 +67,7 @@ describe("TicketRepository", () => {
     const repository = new TicketRepository(path);
     repository.create(fixture("upgraded"));
 
-    expect(repository.appliedMigrations().map((migration) => migration.version)).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(repository.appliedMigrations().map((migration) => migration.version)).toEqual([1, 2, 3, 4, 5, 6, 7]);
     expect(repository.get("upgraded").status).toBe("READY");
     repository.close();
   });
@@ -98,7 +99,7 @@ describe("TicketRepository", () => {
     database.close();
 
     const first = new TicketRepository(path);
-    expect(first.appliedMigrations().map((migration) => migration.version)).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(first.appliedMigrations().map((migration) => migration.version)).toEqual([1, 2, 3, 4, 5, 6, 7]);
     expect(first.latestPlanningThread()).toMatchObject({ id: "thread-v4", status: "idle" });
     expect(first.planningMessages("thread-v4")).toMatchObject([{ content: "preserved message", sessionId: null }]);
     expect(first.getPlanningArtifact("artifact-v4")).toMatchObject({
@@ -109,7 +110,7 @@ describe("TicketRepository", () => {
     first.close();
 
     const second = new TicketRepository(path);
-    expect(second.appliedMigrations()).toHaveLength(6);
+    expect(second.appliedMigrations()).toHaveLength(7);
     expect(second.listPlanningSessions()).toEqual([]);
     second.close();
   });
@@ -137,14 +138,52 @@ describe("TicketRepository", () => {
 
     const first = new TicketRepository(path);
     expect(first.get("v5-ticket")).toMatchObject({ title: "V5", status: "READY" });
-    expect(first.appliedMigrations().map((migration) => migration.version)).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(first.appliedMigrations().map((migration) => migration.version)).toEqual([1, 2, 3, 4, 5, 6, 7]);
     expect(first.listWorkspacePreparationAttempts()).toEqual([]);
     first.close();
 
     const second = new TicketRepository(path);
-    expect(second.appliedMigrations()).toHaveLength(6);
+    expect(second.appliedMigrations()).toHaveLength(7);
     expect(second.get("v5-ticket").description).toBe("preserved");
     second.close();
+  });
+
+  it("upgrades a real v6 database to v7 and preserves planning failures", () => {
+    const directory = mkdtempSync(join(tmpdir(), "raycoder-db-v6-"));
+    temporaryDirectories.push(directory);
+    const path = join(directory, "raycoder.db");
+    const database = new SqliteDatabase(path);
+    database.exec(`CREATE TABLE schema_migrations (
+      version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL
+    );`);
+    for (const migration of migrations.slice(0, 6)) {
+      database.exec(migration.sql);
+      database.prepare("INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)")
+        .run(migration.version, migration.name, "2026-09-02T00:00:00.000Z");
+    }
+    database.prepare(`INSERT INTO planning_threads
+      (id, provider, provider_session_id, status, created_at, updated_at, singleton)
+      VALUES ('thread-v6', 'fake', NULL, 'error', ?, ?, 1)`)
+      .run("2026-09-02T00:00:00.000Z", "2026-09-02T00:00:01.000Z");
+    database.prepare(`INSERT INTO planning_sessions
+      (id, thread_id, provider, stage, request_json, status, error_code, error_detail, created_at, updated_at, completed_at)
+      VALUES ('failed-v6', 'thread-v6', 'fake', 'conversation', ?, 'error', 'quota_exhausted', 'limit', ?, ?, ?)`)
+      .run(JSON.stringify({ kind: "message", content: "preserved" }), "2026-09-02T00:00:00.000Z",
+        "2026-09-02T00:00:01.000Z", "2026-09-02T00:00:01.000Z");
+    database.close();
+
+    const repository = new TicketRepository(path);
+    expect(repository.getPlanningSession("failed-v6")).toMatchObject({
+      status: "error",
+      errorCode: "quota_exhausted",
+      retryOfSessionId: null,
+    });
+    expect(repository.appliedMigrations().at(-1)).toEqual({ version: 7, name: "planning_retry_traceability" });
+    repository.close();
+
+    const reopened = new TicketRepository(path);
+    expect(reopened.appliedMigrations()).toHaveLength(7);
+    reopened.close();
   });
 
   it("persists dependencies and keeps READY_TO_MERGE descendants queued", () => {
