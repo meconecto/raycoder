@@ -1,4 +1,5 @@
 export * from "./agent-adapter.js";
+export * from "./auto-run.js";
 export * from "./codex-agent-adapter.js";
 export * from "./codex-preflight.js";
 export * from "./codex-runtime.js";

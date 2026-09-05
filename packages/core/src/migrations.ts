@@ -347,6 +347,48 @@ export const migrations: readonly Migration[] = [
         ON workspace_verification_attempts(integration_attempt_id, created_at);
     `,
   },
+  {
+    version: 9,
+    name: "durable_opt_in_auto_runs",
+    sql: `
+      CREATE TABLE auto_runs (
+        id TEXT PRIMARY KEY,
+        status TEXT NOT NULL CHECK (status IN ('RUNNING', 'PAUSED', 'STOPPED', 'COMPLETED')),
+        active_slot INTEGER CHECK (active_slot = 1),
+        dirty_policy TEXT NOT NULL CHECK (dirty_policy IN ('cancel', 'committed-head')),
+        current_ticket_id TEXT REFERENCES tickets(id) ON DELETE SET NULL,
+        reason_code TEXT,
+        reason_detail TEXT,
+        started_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        completed_at TEXT,
+        CHECK (
+          (status IN ('RUNNING', 'PAUSED') AND active_slot = 1 AND completed_at IS NULL)
+          OR (status IN ('STOPPED', 'COMPLETED') AND active_slot IS NULL AND completed_at IS NOT NULL)
+        )
+      );
+
+      CREATE UNIQUE INDEX auto_runs_single_active ON auto_runs(active_slot) WHERE active_slot = 1;
+      CREATE INDEX auto_runs_started ON auto_runs(started_at, id);
+
+      CREATE TABLE auto_run_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id TEXT NOT NULL REFERENCES auto_runs(id) ON DELETE CASCADE,
+        sequence INTEGER NOT NULL,
+        type TEXT NOT NULL CHECK (type IN (
+          'STARTED', 'TICKET_STARTED', 'TICKET_FINISHED', 'PAUSED', 'RESUMED', 'STOPPED', 'COMPLETED'
+        )),
+        ticket_id TEXT REFERENCES tickets(id) ON DELETE SET NULL,
+        reason_code TEXT,
+        detail TEXT,
+        created_at TEXT NOT NULL,
+        UNIQUE (run_id, sequence)
+      );
+
+      CREATE INDEX auto_run_events_run_sequence ON auto_run_events(run_id, sequence);
+      CREATE INDEX auto_run_events_ticket ON auto_run_events(ticket_id, created_at);
+    `,
+  },
 ] as const;
 
 export function migrate(database: SqliteDatabase): void {
