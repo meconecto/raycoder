@@ -11,6 +11,9 @@ This is the maintainer runbook for release candidates and stable-channel promoti
   `meconecto/raycoder` and workflow filename `release.yml`. The release workflow exchanges
   GitHub's OIDC identity for short-lived npm publishing credentials; do not create or store a
   long-lived npm token in GitHub or the repository.
+- Keep the pinned `actions/setup-node` step with `registry-url: https://registry.npmjs.org` in
+  `release.yml`. It creates npm's temporary registry configuration so the CLI can exchange the
+  GitHub OIDC identity; `id-token: write` alone is not sufficient for this workflow.
 - For stable promotion, have a local npm maintainer session. Use `npm whoami`, and if needed
   `npm login --auth-type=web`; never print or copy npm authentication configuration.
 
@@ -84,8 +87,11 @@ If the workflow validates and uploads the artifact but fails during `npm publish
 publish log first and check `npm view "raycoder@${VERSION}" version`.
 
 - If npm does not know that version, fix the Trusted Publisher configuration or transient
-  publishing problem, then rerun the same tagged workflow with `publish=true`. A fresh job
-  rebuilds from the same immutable tag and verifies its generated checksum before publishing.
+  publishing problem, then rerun the same tagged workflow with `publish=true`. For `ENEEDAUTH`,
+  also verify that the tagged workflow contains the pinned `actions/setup-node` registry step.
+  A fresh job rebuilds from the same immutable tag and verifies its generated checksum before
+  publishing. If the tagged workflow itself is defective, preserve the tag and prepare a new RC;
+  never move the old tag to the fix.
 - If npm already knows the version, do not retry publication or delete/reuse the version.
   Compare `npm view "raycoder@${VERSION}" dist.integrity dist.shasum` with the verified
   downloaded tarball. If they do not identify the same bytes, prepare a new RC version through
