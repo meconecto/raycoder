@@ -262,6 +262,43 @@ export const migrations: readonly Migration[] = [
       CREATE INDEX planning_dag_confirmations_created ON planning_dag_confirmations(created_at, id);
     `,
   },
+  {
+    version: 6,
+    name: "durable_workspace_preparation",
+    sql: `
+      CREATE TABLE workspace_preparation_attempts (
+        id TEXT PRIMARY KEY,
+        ticket_id TEXT NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+        integration_attempt_id TEXT REFERENCES integration_attempts(id) ON DELETE SET NULL,
+        purpose TEXT NOT NULL CHECK (purpose IN ('dispatch', 'integration')),
+        status TEXT NOT NULL CHECK (status IN (
+          'AWAITING_APPROVAL', 'QUEUED', 'PREPARING', 'PREPARED', 'NOT_APPLICABLE',
+          'FAILED', 'CANCELLED', 'INTERRUPTED'
+        )),
+        strategy TEXT NOT NULL,
+        fingerprint TEXT NOT NULL,
+        plan_json TEXT NOT NULL,
+        approval_json TEXT,
+        workspace TEXT NOT NULL,
+        base_commit TEXT NOT NULL,
+        resumed_from_attempt_id TEXT REFERENCES workspace_preparation_attempts(id) ON DELETE SET NULL,
+        process_json TEXT,
+        output TEXT,
+        diagnostic_code TEXT,
+        diagnostic_detail TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        completed_at TEXT
+      );
+
+      CREATE INDEX workspace_preparation_ticket_created
+        ON workspace_preparation_attempts(ticket_id, created_at, id);
+      CREATE INDEX workspace_preparation_status
+        ON workspace_preparation_attempts(status);
+      CREATE INDEX workspace_preparation_integration
+        ON workspace_preparation_attempts(integration_attempt_id, created_at);
+    `,
+  },
 ] as const;
 
 export function migrate(database: SqliteDatabase): void {

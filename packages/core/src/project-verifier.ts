@@ -34,9 +34,14 @@ const verificationScriptOrder = ["typecheck", "lint", "test", "build"] as const;
 
 export class NodeProjectVerifier implements VerificationStrategy {
   readonly #runner: ProcessRunner;
+  readonly #installDependencies: boolean;
 
-  public constructor(runner: ProcessRunner = new NodeProcessRunner()) {
+  public constructor(
+    runner: ProcessRunner = new NodeProcessRunner(),
+    options: { installDependencies?: boolean } = {},
+  ) {
     this.#runner = runner;
+    this.#installDependencies = options.installDependencies ?? true;
   }
 
   public async verify(projectRoot: string): Promise<VerificationResult> {
@@ -65,7 +70,10 @@ export class NodeProjectVerifier implements VerificationStrategy {
     }
 
     const manager = detected.manager;
-    const commands = [installCommand(manager), ...selectedScripts.map((script) => scriptCommand(manager, script))];
+    const commands = [
+      ...(this.#installDependencies ? [installCommand(manager)] : []),
+      ...selectedScripts.map((script) => scriptCommand(manager, script)),
+    ];
     const output: string[] = [];
     for (const command of commands) {
       try {

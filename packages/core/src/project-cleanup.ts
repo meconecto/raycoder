@@ -6,6 +6,7 @@ import { isPathInside } from "./git-workspace.js";
 import { NodeProcessRunner, ProcessExecutionError, type ProcessRunner } from "./process.js";
 import type { ProjectManager } from "./project-manager.js";
 import type { ProjectRuntime } from "./project-runtime.js";
+import type { WorkspacePreparationAttempt, WorkspacePreparationStatus } from "./ticket-repository.js";
 
 export type CleanupTargetKind =
   | "registration"
@@ -66,6 +67,13 @@ interface Inventory {
 
 const planLifetimeMilliseconds = 10 * 60 * 1_000;
 const riskyTicketStatuses = new Set<TicketStatus>(["FAILED", "INTERRUPTED"]);
+const riskyPreparationStatuses = new Set<WorkspacePreparationStatus>([
+  "AWAITING_APPROVAL",
+  "QUEUED",
+  "PREPARING",
+  "FAILED",
+  "INTERRUPTED",
+]);
 
 export class ProjectCleanupService {
   readonly #projects: ProjectManager;
@@ -211,6 +219,10 @@ export class ProjectCleanupService {
     const tickets = runtime.repository.list();
     const byWorkspace = new Map(tickets.filter(hasWorkspace).map((ticket) => [resolve(ticket.workspace), ticket]));
     const integrationAttempts = runtime.repository.listIntegrationAttempts();
+    const latestPreparationByWorkspace = new Map<string, WorkspacePreparationAttempt>();
+    for (const preparation of runtime.repository.listWorkspacePreparationAttempts()) {
+      latestPreparationByWorkspace.set(resolve(preparation.workspace), preparation);
+    }
     const byIntegrationWorkspace = new Map(integrationAttempts
       .filter((attempt) => attempt.reconciliationWorkspace !== null)
       .map((attempt) => [resolve(attempt.reconciliationWorkspace as string), attempt]));
@@ -231,7 +243,9 @@ export class ProjectCleanupService {
       }
       const dirty = await this.#dirty(worktree.path);
       const riskyStatus = ticket !== undefined && riskyTicketStatuses.has(ticket.status);
-      const requiresForce = dirty || riskyStatus;
+      const preparation = latestPreparationByWorkspace.get(resolve(worktree.path));
+      const riskyPreparation = preparation !== undefined && riskyPreparationStatuses.has(preparation.status);
+      const requiresForce = dirty || riskyStatus || riskyPreparation;
       const id = `worktree:${resolve(worktree.path)}`;
       targets.push({
         id,
@@ -249,6 +263,11 @@ export class ProjectCleanupService {
       });
       if (dirty) warnings.push({ code: "worktree.dirty", message: `Dirty worktree requires force: ${worktree.path}`, targetId: id });
       if (riskyStatus) warnings.push({ code: "ticket.preserved", message: `Ticket ${ticket.id} is ${ticket.status} and is preserved by default`, targetId: id });
+      if (riskyPreparation) warnings.push({
+        code: "preparation.preserved",
+        message: `Workspace preparation ${preparation.id} is ${preparation.status} and is preserved by default`,
+        targetId: id,
+      });
     }
 
     const ticketByBranch = new Map(tickets.filter(hasBranch).map((ticket) => [ticket.branch, ticket]));

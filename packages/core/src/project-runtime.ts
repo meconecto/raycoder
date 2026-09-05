@@ -17,6 +17,7 @@ import { SettingsService } from "./settings-service.js";
 import { SkillBundleManager } from "./skill-bundle-manager.js";
 import { TicketActions } from "./ticket-actions.js";
 import { TicketRepository, type PlanningSession } from "./ticket-repository.js";
+import { WorkspacePreparationService } from "./workspace-preparation.js";
 
 export interface ProjectRuntimeOptions {
   readonly adapter: AgentAdapter;
@@ -40,6 +41,7 @@ export class ProjectRuntime {
   public readonly preview: PreviewManager;
   public readonly skills: SkillBundleManager;
   public readonly settings: SettingsService | null;
+  public readonly preparation: WorkspacePreparationService;
   public readonly recovery: readonly RecoveryResult[];
   public readonly planningRecovery: readonly PlanningSession[];
   readonly #adapter: AgentAdapter;
@@ -55,6 +57,7 @@ export class ProjectRuntime {
     preview: PreviewManager;
     skills: SkillBundleManager;
     settings: SettingsService | null;
+    preparation: WorkspacePreparationService;
     recovery: readonly RecoveryResult[];
     planningRecovery: readonly PlanningSession[];
     adapter: AgentAdapter;
@@ -69,6 +72,7 @@ export class ProjectRuntime {
     this.preview = input.preview;
     this.skills = input.skills;
     this.settings = input.settings;
+    this.preparation = input.preparation;
     this.recovery = input.recovery;
     this.planningRecovery = input.planningRecovery;
     this.#adapter = input.adapter;
@@ -95,6 +99,8 @@ export class ProjectRuntime {
       undefined,
       new GitIntegrationRecoveryEvidence(projectRoot, runner),
     ).recoverUncontrolledShutdown();
+    const preparation = new WorkspacePreparationService(repository, workspaces, runner);
+    preparation.recoverInterrupted();
     const dispatcher = new Dispatcher(
       repository,
       workspaces,
@@ -104,9 +110,10 @@ export class ProjectRuntime {
     );
     const integration = new IntegrationService(repository, projectRoot, options.integrationMode ?? effective?.integrationMode ?? "auto", {
       runner,
+      preparation,
       ...(options.verifier === undefined ? {} : { verifier: options.verifier }),
     });
-    const orchestrator = new ProjectOrchestrator(repository, dispatcher, integration);
+    const orchestrator = new ProjectOrchestrator(repository, dispatcher, integration, preparation);
     const scheduler = new Scheduler(repository, orchestrator, projectRoot);
     const tickets = new TicketActions(repository, orchestrator, scheduler, baseBranch, projectRoot);
     const planning = new PlanningPipeline(repository, options.adapter, projectRoot, baseBranch);
@@ -123,6 +130,7 @@ export class ProjectRuntime {
       preview,
       skills,
       settings,
+      preparation,
       recovery,
       planningRecovery,
       adapter: options.adapter,
