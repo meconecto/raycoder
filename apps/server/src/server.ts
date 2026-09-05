@@ -20,6 +20,7 @@ import type {
   WorkspaceVerificationConfig,
 } from "@raycoder/core";
 import {
+  AutoRunError,
   createTicket,
   DependencyCycleError,
   PlanningBusyError,
@@ -358,10 +359,14 @@ async function routeProjects(
   }
   if (request.method === "PUT" && tail === "preparation/config") {
     const body = await readJson(request);
+    runtime.auto.pauseForIntervention("configuration_changed");
+    if (runtime.scheduler.pendingCount !== 0) throw new ProjectOperationBusyError();
     sendJson(response, 200, { config: runtime.preparation.setConfig(body as unknown as WorkspacePreparationConfig) });
     return true;
   }
   if (request.method === "DELETE" && tail === "preparation/approval") {
+    runtime.auto.pauseForIntervention("configuration_changed");
+    if (runtime.scheduler.pendingCount !== 0) throw new ProjectOperationBusyError();
     runtime.preparation.revokeApproval();
     sendJson(response, 200, { approval: null });
     return true;
@@ -391,10 +396,14 @@ async function routeProjects(
   }
   if (request.method === "PUT" && tail === "verification/config") {
     const body = await readJson(request);
+    runtime.auto.pauseForIntervention("configuration_changed");
+    if (runtime.scheduler.pendingCount !== 0) throw new ProjectOperationBusyError();
     sendJson(response, 200, { config: runtime.verification.setConfig(body as unknown as WorkspaceVerificationConfig) });
     return true;
   }
   if (request.method === "DELETE" && tail === "verification/approval") {
+    runtime.auto.pauseForIntervention("configuration_changed");
+    if (runtime.scheduler.pendingCount !== 0) throw new ProjectOperationBusyError();
     runtime.verification.revokeApproval();
     sendJson(response, 200, { approval: null });
     return true;
@@ -413,6 +422,8 @@ async function routeProjects(
     const capabilities = [await runtime.capabilities()];
     const typedOverride = override as ProjectConfigOverride;
     const effective = await runtime.settings.validateProjectOverride(typedOverride, capabilities);
+    runtime.auto.pauseForIntervention("configuration_changed");
+    if (runtime.scheduler.pendingCount !== 0) throw new ProjectOperationBusyError();
     runtime.settings.setProjectOverride(typedOverride);
     await projects.reopen(projectId);
     sendJson(response, 200, { override, effective });
@@ -453,6 +464,49 @@ async function routeProjects(
       ...(url.searchParams.get("before") === null ? {} : { before: url.searchParams.get("before") as string }),
       ...(severity === null ? {} : { severity }),
     }));
+    return true;
+  }
+  if (request.method === "GET" && tail === "auto") {
+    sendJson(response, 200, runtime.auto.snapshot());
+    return true;
+  }
+  if (request.method === "POST" && tail === "auto/actions") {
+    const body = await readJson(request);
+    const runId = typeof body.runId === "string" ? body.runId : undefined;
+    if (body.action === "pause") {
+      runtime.auto.pause(runId);
+      sendJson(response, 200, runtime.auto.snapshot());
+      return true;
+    }
+    if (body.action === "stop") {
+      runtime.auto.stop(runId);
+      sendJson(response, 200, runtime.auto.snapshot());
+      return true;
+    }
+    if (body.action !== "start" && body.action !== "resume") {
+      sendError(response, 400, "auto.action_invalid", new Error("action must be start, pause, resume or stop"));
+      return true;
+    }
+    const run = body.action === "start"
+      ? runtime.auto.start({ dirtyPolicy: body.dirtyPolicy === "committed-head" ? "committed-head" : "cancel" })
+      : runtime.auto.resume(runId);
+    if (!(await projects.inspect(runtime.projectRoot)).hasBaseCommit) {
+      runtime.auto.pauseWithReason(run.id, "project.baseline_required", "Create the first Git commit before resuming Auto.");
+      sendJson(response, 202, runtime.auto.snapshot());
+      return true;
+    }
+    if (preflight !== undefined && !preflight.canExecute) {
+      runtime.auto.pauseWithReason(run.id, "provider.unavailable", "No provider is currently available for agent execution.");
+      sendJson(response, 202, runtime.auto.snapshot());
+      return true;
+    }
+    const preparationApproval = readPreparationApproval(body.preparationApproval);
+    const verificationApproval = readVerificationApproval(body.verificationApproval);
+    void runtime.auto.run(run.id, {
+      ...(preparationApproval === undefined ? {} : { preparationApproval }),
+      ...(verificationApproval === undefined ? {} : { verificationApproval }),
+    }).catch(() => undefined);
+    sendJson(response, 202, runtime.auto.snapshot());
     return true;
   }
   if (request.method === "POST" && tail === "planning/thread") {
@@ -607,6 +661,7 @@ async function routeProjects(
       return true;
     }
     if (body.action === "confirm_tickets") {
+      runtime.auto.pauseForIntervention(runtime.repository.latestPlanningDagConfirmation() === null ? "manual_intervention" : "dag_replaced");
       sendJson(response, 200, await runtime.scheduler.serialize(async () => runtime.planning.confirmTickets(artifactId)));
       return true;
     }
@@ -620,6 +675,7 @@ async function routeProjects(
       return true;
     }
     const artifactId = body.artifactId;
+    runtime.auto.pauseForIntervention(runtime.repository.latestPlanningDagConfirmation() === null ? "manual_intervention" : "dag_replaced");
     sendJson(response, 200, await runtime.scheduler.serialize(async () => runtime.planning.confirmTickets(artifactId)));
     return true;
   }
@@ -667,6 +723,7 @@ async function routeProjects(
     const predecessorIds = Array.isArray(body.predecessorIds) && body.predecessorIds.every((id) => typeof id === "string")
       ? body.predecessorIds as string[]
       : [];
+    runtime.auto.pauseForIntervention("manual_intervention");
     const ticket = runtime.tickets.create({
       ...(typeof body.id === "string" ? { id: body.id } : {}),
       title: body.title,
@@ -746,11 +803,14 @@ async function routeProjects(
       sendJson(response, 400, { error: "predecessorIds must be a string array" });
       return true;
     }
+    runtime.auto.pauseForIntervention("dag_replaced");
+    if (runtime.scheduler.pendingCount !== 0) throw new ProjectOperationBusyError();
     sendJson(response, 200, { ticket: runtime.tickets.replaceDependencies(ticketId, body.predecessorIds as string[]) });
     return true;
   }
   if (request.method === "POST" && resource === "actions") {
     const body = await readJson(request);
+    runtime.auto.pauseForIntervention("manual_intervention");
     if (body.action === "run") {
       if (preflight !== undefined && !preflight.canExecute) {
         sendError(response, 503, "provider.unavailable", new Error("No provider is currently available for agent execution"));
@@ -897,6 +957,7 @@ function readVerificationApproval(value: unknown): WorkspaceVerificationApproval
 }
 
 function httpError(error: unknown): { status: number; code: string; details?: unknown } {
+  if (error instanceof AutoRunError) return { status: 409, code: error.code };
   const preparationError = asWorkspacePreparationError(error);
   if (preparationError !== null) {
     return {

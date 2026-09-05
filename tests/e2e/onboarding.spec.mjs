@@ -194,6 +194,13 @@ test("first run, onboarding, dirty confirmation and cleanup", async ({ page }) =
     await page.getByRole("button", { name: "Approve for this project" }).click();
     await expect(multistack.getByText("DONE", { exact: true })).toBeVisible();
 
+    const plannedCore = page.locator(".card").filter({ hasText: "Build core" });
+    const plannedUi = page.locator(".card").filter({ hasText: "Build UI" });
+    await plannedCore.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(plannedCore.getByText("CANCELLED", { exact: true })).toBeVisible();
+    await plannedUi.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(plannedUi.getByText("CANCELLED", { exact: true })).toBeVisible();
+
     writeFileSync(join(project, "package.json"), JSON.stringify({
       private: true,
       packageManager: "pnpm@1.0.0",
@@ -205,13 +212,19 @@ test("first run, onboarding, dirty confirmation and cleanup", async ({ page }) =
     await page.locator("#ticket-title").fill("Preparation retry");
     await page.locator("#ticket-description").fill("Preserve and retry a failed setup");
     await page.getByRole("button", { name: "Create", exact: true }).click();
-    const failedPreparation = page.locator(".card").filter({ hasText: "Preparation retry" });
-    await failedPreparation.getByRole("button", { name: "Run", exact: true }).click();
+    const failedPreparation = page.locator(".card:not(.auto-panel)").filter({ hasText: "Preparation retry" });
+    await page.getByRole("button", { name: "Start Auto", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Approve and resume", exact: true })).toBeVisible({ timeout: 8_000 });
+    await page.getByRole("button", { name: "Approve and resume", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Allow workspace setup and verification?" })).toBeVisible();
     await page.getByRole("button", { name: "Approve for this project" }).click();
     await expect(failedPreparation.getByText("BLOCKED", { exact: true })).toBeVisible();
     await expect(failedPreparation).toContainText("preparation.failed");
+    await expect(page.locator(".auto-reason")).toContainText("preparation.failed");
     await failedPreparation.getByRole("button", { name: "Retry", exact: true }).click();
     await expect(failedPreparation.getByText("DONE", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Stop Auto", exact: true }).click();
+    await expect(page.locator(".auto-panel")).toContainText("STOPPED");
 
     await page.reload();
     await page.locator("#projects [data-project]").click();
@@ -221,7 +234,8 @@ test("first run, onboarding, dirty confirmation and cleanup", async ({ page }) =
     await expect(page.locator("#verification-mode")).toHaveValue("explicit");
     await expect(page.locator("[data-verification-unit]")).toHaveCount(2);
     await page.getByRole("button", { name: "Tickets", exact: true }).click();
-    await expect(page.locator(".card").filter({ hasText: "Preparation retry" }).getByText("DONE", { exact: true })).toBeVisible();
+    await expect(page.locator(".card:not(.auto-panel)").filter({ hasText: "Preparation retry" }).getByText("DONE", { exact: true })).toBeVisible();
+    await expect(page.locator(".auto-panel")).toContainText("STOPPED");
 
     writeFileSync(join(project, "local-preserved.txt"), "cleanup must preserve the checkout\n", "utf8");
 

@@ -134,6 +134,31 @@ describe("ProjectRegistry and ProjectRuntime", () => {
     manager.close();
   });
 
+  it("reopens an active Auto run paused and requires explicit resume", async () => {
+    const globalRoot = mkdtempSync(join(tmpdir(), "raycoder-auto-recovery-"));
+    temporaryDirectories.push(globalRoot);
+    const manager = new ProjectManager(
+      new ProjectRegistry(join(globalRoot, "projects.db")),
+      () => ({ adapter: new FakeAgentAdapter(), workspaceVerification: false }),
+    );
+    const first = await manager.register(await gitFixture("auto-recovery"));
+    const projectId = manager.list()[0]?.project.id;
+    if (projectId === undefined) throw new Error("Expected registered project");
+    first.tickets.create({ id: "auto-pending", title: "Pending", description: "must not start on reopen" });
+    const run = first.auto.start({ dirtyPolicy: "cancel" });
+    manager.closeProject(projectId);
+
+    const reopened = await manager.open(projectId);
+    expect(reopened.repository.getAutoRun(run.id)).toMatchObject({
+      status: "PAUSED",
+      reasonCode: "restart_required",
+      currentTicketId: null,
+    });
+    expect(reopened.repository.get("auto-pending").status).toBe("READY");
+    expect(reopened.scheduler.pendingCount).toBe(0);
+    manager.close();
+  });
+
   it("never starts the adapter until workspace preparation is durably PREPARED", async () => {
     const globalRoot = mkdtempSync(join(tmpdir(), "raycoder-preparation-runtime-"));
     temporaryDirectories.push(globalRoot);

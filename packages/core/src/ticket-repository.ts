@@ -121,6 +121,40 @@ interface WorkspaceVerificationAttemptRow {
   completed_at: string | null;
 }
 
+export type AutoRunStatus = "RUNNING" | "PAUSED" | "STOPPED" | "COMPLETED";
+export type AutoRunEventType =
+  | "STARTED"
+  | "TICKET_STARTED"
+  | "TICKET_FINISHED"
+  | "PAUSED"
+  | "RESUMED"
+  | "STOPPED"
+  | "COMPLETED";
+
+interface AutoRunRow {
+  id: string;
+  status: AutoRunStatus;
+  active_slot: number | null;
+  dirty_policy: "cancel" | "committed-head";
+  current_ticket_id: string | null;
+  reason_code: string | null;
+  reason_detail: string | null;
+  started_at: string;
+  updated_at: string;
+  completed_at: string | null;
+}
+
+interface AutoRunEventRow {
+  id: number;
+  run_id: string;
+  sequence: number;
+  type: AutoRunEventType;
+  ticket_id: string | null;
+  reason_code: string | null;
+  detail: string | null;
+  created_at: string;
+}
+
 export interface TicketHistoryEntry {
   readonly id: number;
   readonly ticketId: string;
@@ -406,6 +440,29 @@ export interface CreateWorkspaceVerificationAttempt {
   readonly targetCommit: string;
   readonly resumedFromAttemptId?: string | null;
   readonly now?: string;
+}
+
+export interface AutoRun {
+  readonly id: string;
+  readonly status: AutoRunStatus;
+  readonly dirtyPolicy: "cancel" | "committed-head";
+  readonly currentTicketId: string | null;
+  readonly reasonCode: string | null;
+  readonly reasonDetail: string | null;
+  readonly startedAt: string;
+  readonly updatedAt: string;
+  readonly completedAt: string | null;
+}
+
+export interface AutoRunEvent {
+  readonly id: number;
+  readonly runId: string;
+  readonly sequence: number;
+  readonly type: AutoRunEventType;
+  readonly ticketId: string | null;
+  readonly reasonCode: string | null;
+  readonly detail: string | null;
+  readonly createdAt: string;
 }
 
 export interface CreateIntegrationAttempt {
@@ -1321,6 +1378,119 @@ export class TicketRepository {
     return uncertain.map((attempt) => this.getWorkspaceVerificationAttempt(attempt.id));
   }
 
+  public createAutoRun(input: {
+    id: string;
+    dirtyPolicy: "cancel" | "committed-head";
+    now?: string;
+  }): AutoRun {
+    const now = input.now ?? new Date().toISOString();
+    const transaction = this.#database.transaction(() => {
+      this.#database.prepare(`INSERT INTO auto_runs (
+        id, status, active_slot, dirty_policy, started_at, updated_at
+      ) VALUES (?, 'RUNNING', 1, ?, ?, ?)`).run(input.id, input.dirtyPolicy, now, now);
+      this.#insertAutoRunEvent(input.id, "STARTED", null, "user_started", null, now);
+      this.#writeAutoRunEnabled(true, now);
+    });
+    transaction();
+    return this.getAutoRun(input.id);
+  }
+
+  public getAutoRun(id: string): AutoRun {
+    const row = this.#database.prepare("SELECT * FROM auto_runs WHERE id = ?").get(id) as AutoRunRow | undefined;
+    if (row === undefined) throw new Error(`Unknown auto run: ${id}`);
+    return autoRunFromRow(row);
+  }
+
+  public listAutoRuns(): AutoRun[] {
+    return (this.#database.prepare("SELECT * FROM auto_runs ORDER BY started_at, rowid").all() as AutoRunRow[])
+      .map(autoRunFromRow);
+  }
+
+  public latestAutoRun(): AutoRun | null {
+    const row = this.#database.prepare("SELECT * FROM auto_runs ORDER BY started_at DESC, rowid DESC LIMIT 1")
+      .get() as AutoRunRow | undefined;
+    return row === undefined ? null : autoRunFromRow(row);
+  }
+
+  public activeAutoRun(): AutoRun | null {
+    const row = this.#database.prepare("SELECT * FROM auto_runs WHERE active_slot = 1 LIMIT 1")
+      .get() as AutoRunRow | undefined;
+    return row === undefined ? null : autoRunFromRow(row);
+  }
+
+  public autoRunEvents(runId: string): AutoRunEvent[] {
+    this.getAutoRun(runId);
+    return (this.#database.prepare("SELECT * FROM auto_run_events WHERE run_id = ? ORDER BY sequence")
+      .all(runId) as AutoRunEventRow[]).map(autoRunEventFromRow);
+  }
+
+  public updateAutoRun(
+    id: string,
+    patch: {
+      status?: AutoRunStatus;
+      currentTicketId?: string | null;
+      reasonCode?: string | null;
+      reasonDetail?: string | null;
+    },
+    event: {
+      type: AutoRunEventType;
+      ticketId?: string | null;
+      reasonCode?: string | null;
+      detail?: string | null;
+    },
+    now = new Date().toISOString(),
+  ): AutoRun {
+    const transaction = this.#database.transaction(() => {
+      const current = this.getAutoRun(id);
+      const status = patch.status ?? current.status;
+      const terminal = status === "STOPPED" || status === "COMPLETED";
+      const value = <T>(next: T | undefined, previous: T): T => next === undefined ? previous : next;
+      this.#database.prepare(`UPDATE auto_runs SET status = ?, active_slot = ?, current_ticket_id = ?,
+        reason_code = ?, reason_detail = ?, updated_at = ?, completed_at = ? WHERE id = ?`).run(
+          status,
+          terminal ? null : 1,
+          value(patch.currentTicketId, current.currentTicketId),
+          value(patch.reasonCode, current.reasonCode),
+          value(patch.reasonDetail, current.reasonDetail),
+          now,
+          terminal ? now : null,
+          id,
+        );
+      this.#insertAutoRunEvent(
+        id,
+        event.type,
+        event.ticketId ?? null,
+        event.reasonCode ?? null,
+        event.detail ?? null,
+        now,
+      );
+      if (terminal) this.#writeAutoRunEnabled(false, now);
+    });
+    transaction();
+    return this.getAutoRun(id);
+  }
+
+  public recoverAutoRun(now = new Date().toISOString()): AutoRun | null {
+    const active = this.activeAutoRun();
+    if (active?.status !== "RUNNING") return null;
+    return this.updateAutoRun(active.id, {
+      status: "PAUSED",
+      currentTicketId: null,
+      reasonCode: "restart_required",
+      reasonDetail: "raycoder restarted while Auto was running. Resume explicitly after reviewing ticket recovery.",
+    }, {
+      type: "PAUSED",
+      ticketId: active.currentTicketId,
+      reasonCode: "restart_required",
+      detail: "Runtime reopened; Auto was not resumed automatically.",
+    }, now);
+  }
+
+  public autoRunEnabled(): boolean {
+    const value = this.projectSettings()["autoRun"];
+    return typeof value === "object" && value !== null && (value as { enabled?: unknown }).enabled === true;
+  }
+
   public setProjectSetting(key: string, value: unknown, now = new Date().toISOString()): void {
     this.#database.prepare(`INSERT INTO project_settings (key, value_json, updated_at) VALUES (?, ?, ?)
       ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at`)
@@ -1547,6 +1717,28 @@ export class TicketRepository {
         VALUES (?, ?, ?, ?, ?)`)
       .run(ticketId, fromStatus, toStatus, reason, createdAt);
   }
+
+  #insertAutoRunEvent(
+    runId: string,
+    type: AutoRunEventType,
+    ticketId: string | null,
+    reasonCode: string | null,
+    detail: string | null,
+    createdAt: string,
+  ): void {
+    const row = this.#database.prepare(
+      "SELECT COALESCE(MAX(sequence), 0) + 1 AS sequence FROM auto_run_events WHERE run_id = ?",
+    ).get(runId) as { sequence: number };
+    this.#database.prepare(`INSERT INTO auto_run_events (
+      run_id, sequence, type, ticket_id, reason_code, detail, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(runId, row.sequence, type, ticketId, reasonCode, detail, createdAt);
+  }
+
+  #writeAutoRunEnabled(enabled: boolean, now: string): void {
+    this.#database.prepare(`INSERT INTO project_settings (key, value_json, updated_at) VALUES ('autoRun', ?, ?)
+      ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at`)
+      .run(JSON.stringify({ enabled }), now);
+  }
 }
 
 function fromRow(row: TicketRow): Ticket {
@@ -1638,6 +1830,33 @@ function workspaceVerificationAttemptFromRow(row: WorkspaceVerificationAttemptRo
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     completedAt: row.completed_at,
+  };
+}
+
+function autoRunFromRow(row: AutoRunRow): AutoRun {
+  return {
+    id: row.id,
+    status: row.status,
+    dirtyPolicy: row.dirty_policy,
+    currentTicketId: row.current_ticket_id,
+    reasonCode: row.reason_code,
+    reasonDetail: row.reason_detail,
+    startedAt: row.started_at,
+    updatedAt: row.updated_at,
+    completedAt: row.completed_at,
+  };
+}
+
+function autoRunEventFromRow(row: AutoRunEventRow): AutoRunEvent {
+  return {
+    id: row.id,
+    runId: row.run_id,
+    sequence: row.sequence,
+    type: row.type,
+    ticketId: row.ticket_id,
+    reasonCode: row.reason_code,
+    detail: row.detail,
+    createdAt: row.created_at,
   };
 }
 

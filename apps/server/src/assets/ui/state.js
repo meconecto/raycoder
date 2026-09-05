@@ -14,6 +14,7 @@ export const state = {
   capabilities: null,
   preparation: null,
   verification: null,
+  auto: { enabled: false, run: null, events: [], queue: [] },
   activity: { items: [], nextCursor: null, summary: { count: 0 } },
   preferences: { locale: "auto", theme: "system" },
   pendingWorkspaceAction: null,

@@ -1,6 +1,8 @@
 import type { TicketStatus } from "./domain.js";
 import type {
   IntegrationAttempt,
+  AutoRun,
+  AutoRunEvent,
   PlanningSession,
   TicketRepository,
   WorkspacePreparationAttempt,
@@ -8,13 +10,14 @@ import type {
 } from "./ticket-repository.js";
 
 export type ActivitySeverity = "info" | "warning" | "error";
-export type ActivitySource = "planning" | "ticket" | "preparation" | "verification" | "integration";
+export type ActivitySource = "planning" | "ticket" | "preparation" | "verification" | "integration" | "auto";
 export type ActivityAction =
   | "retry_planning"
   | "resume_planning"
   | "open_ticket"
   | "approve_preparation"
   | "confirm_integration"
+  | "open_auto"
   | "open_settings";
 
 export interface ProjectActivityItem {
@@ -109,11 +112,36 @@ export class ProjectActivityService {
         attempt,
         this.#repository.latestIntegrationAttempt(attempt.ticketId),
       )),
+      ...this.#repository.listAutoRuns().flatMap((run) => {
+        const events = this.#repository.autoRunEvents(run.id);
+        const latestEventId = events.at(-1)?.id ?? null;
+        return events.map((event) => autoItem(run, event, this.#repository.activeAutoRun(), latestEventId));
+      }),
     ];
     return items.sort((left, right) => (
       right.occurredAt.localeCompare(left.occurredAt) || right.id.localeCompare(left.id)
     ));
   }
+}
+
+function autoItem(run: AutoRun, event: AutoRunEvent, active: AutoRun | null, latestEventId: number | null): ProjectActivityItem {
+  const attention = event.type === "PAUSED";
+  return {
+    id: `auto:${event.id}`,
+    source: "auto",
+    severity: attention ? "warning" : "info",
+    status: event.type,
+    code: event.reasonCode,
+    title: "Auto execution",
+    detail: event.detail,
+    occurredAt: event.createdAt,
+    ticketId: event.ticketId,
+    sessionId: null,
+    action: attention ? "open_auto" : null,
+    resolved: attention && (
+      active?.id !== run.id || active.status !== "PAUSED" || run.reasonCode !== event.reasonCode || event.id !== latestEventId
+    ),
+  };
 }
 
 function verificationItem(attempt: WorkspaceVerificationAttempt, latest: WorkspaceVerificationAttempt | null): ProjectActivityItem {

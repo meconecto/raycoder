@@ -1,6 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import type { AdapterCapabilities, AgentAdapter } from "./agent-adapter.js";
+import { AutoRunService } from "./auto-run.js";
 import { Dispatcher } from "./dispatcher.js";
 import { GitWorkspaceManager } from "./git-workspace.js";
 import type { IntegrationMode } from "./domain.js";
@@ -39,6 +40,7 @@ export class ProjectRuntime {
   public readonly orchestrator: ProjectOrchestrator;
   public readonly scheduler: Scheduler;
   public readonly tickets: TicketActions;
+  public readonly auto: AutoRunService;
   public readonly planning: PlanningPipeline;
   public readonly preview: PreviewManager;
   public readonly skills: SkillBundleManager;
@@ -56,6 +58,7 @@ export class ProjectRuntime {
     orchestrator: ProjectOrchestrator;
     scheduler: Scheduler;
     tickets: TicketActions;
+    auto: AutoRunService;
     planning: PlanningPipeline;
     preview: PreviewManager;
     skills: SkillBundleManager;
@@ -72,6 +75,7 @@ export class ProjectRuntime {
     this.orchestrator = input.orchestrator;
     this.scheduler = input.scheduler;
     this.tickets = input.tickets;
+    this.auto = input.auto;
     this.planning = input.planning;
     this.preview = input.preview;
     this.skills = input.skills;
@@ -126,6 +130,8 @@ export class ProjectRuntime {
     const orchestrator = new ProjectOrchestrator(repository, dispatcher, integration, preparation, activeVerification);
     const scheduler = new Scheduler(repository, orchestrator, projectRoot);
     const tickets = new TicketActions(repository, orchestrator, scheduler, baseBranch, projectRoot);
+    const auto = new AutoRunService(repository, scheduler);
+    auto.recoverInterrupted();
     const planning = new PlanningPipeline(repository, options.adapter, projectRoot, baseBranch);
     const planningRecovery = planning.recoverInterruptedSessions();
     const preview = new PreviewManager(repository, projectRoot, runner);
@@ -136,6 +142,7 @@ export class ProjectRuntime {
       orchestrator,
       scheduler,
       tickets,
+      auto,
       planning,
       preview,
       skills,
@@ -154,6 +161,7 @@ export class ProjectRuntime {
 
   public close(): void {
     this.preview.stop();
+    this.auto.prepareForClose();
     this.repository.close();
   }
 }

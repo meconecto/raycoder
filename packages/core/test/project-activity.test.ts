@@ -61,4 +61,25 @@ describe("ProjectActivityService", () => {
     expect(activity.list().items.find((item) => item.id === `verification:${failed.id}`)?.resolved).toBe(true);
     repository.close();
   });
+
+  it("projects only the current Auto pause as unresolved attention", () => {
+    const repository = new TicketRepository(":memory:");
+    const run = repository.createAutoRun({ id: "auto-activity", dirtyPolicy: "cancel" });
+    repository.updateAutoRun(run.id, {
+      status: "PAUSED",
+      reasonCode: "quota_exhausted",
+      reasonDetail: "Usage is unavailable.",
+    }, { type: "PAUSED", reasonCode: "quota_exhausted", detail: "Usage is unavailable." });
+    const paused = new ProjectActivityService(repository);
+    expect(paused.summary()).toMatchObject({ count: 1, highestSeverity: "warning", latestCode: "quota_exhausted" });
+    expect(paused.list().items[0]).toMatchObject({ source: "auto", action: "open_auto", resolved: false });
+
+    repository.updateAutoRun(run.id, { status: "RUNNING", reasonCode: null, reasonDetail: null }, {
+      type: "RESUMED",
+      reasonCode: "user_resumed",
+    });
+    expect(new ProjectActivityService(repository).summary().count).toBe(0);
+    expect(new ProjectActivityService(repository).list().items.find((item) => item.status === "PAUSED")?.resolved).toBe(true);
+    repository.close();
+  });
 });

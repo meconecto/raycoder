@@ -59,6 +59,7 @@ pnpm dogfood:v1
 pnpm dogfood:rc4
 pnpm dogfood:preparation
 pnpm dogfood:verification
+pnpm dogfood:auto
 pnpm dev -- /path/to/a/git/repository
 ```
 
@@ -85,9 +86,12 @@ contained configuration model. Verification output is sanitized and bounded, tra
 changes fail the gate, and a changed command, tool, manifest, lock or script requires fresh
 approval. If the canonical base moved, the reconciliation worktree is subject to the same gate.
 
-Manual **Run** per ticket remains the default. A sequential Auto mode is an explicit future
-follow-up: it will be opt-in and pause for approvals, blockers, failures, or human intervention.
-No Auto controls are enabled in this release.
+Manual **Run** per ticket remains the default. **Start Auto** is an explicit per-project opt-in
+that runs eligible tickets sequentially in stable order. It pauses on approvals, confirmation,
+blocked or failed work, provider/authentication/quota problems, configuration changes, DAG
+replacement, restart, or manual ticket intervention. The Tickets and Overview views show the
+planned queue, current ticket, durable reason and Start/Pause/Resume/Stop controls. Pause and Stop
+do not cancel a ticket already running; they prevent the next one from starting.
 
 Integration is automatic by default. To require approval before changing a base branch:
 
