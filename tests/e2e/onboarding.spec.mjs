@@ -5,6 +5,7 @@ import { execFileSync } from "node:child_process";
 import { expect, test } from "@playwright/test";
 
 test("first run, onboarding, dirty confirmation and cleanup", async ({ page }) => {
+  test.setTimeout(90_000);
   const parent = mkdtempSync(join(tmpdir(), "raycoder-browser-e2e-"));
   const project = join(parent, "new-project");
   try {
@@ -104,7 +105,11 @@ test("first run, onboarding, dirty confirmation and cleanup", async ({ page }) =
     await expect(page.locator(".message.user").filter({ hasText: "Plan a conversational release slice" })).toBeVisible();
 
     await page.getByRole("button", { name: "Overview", exact: true }).click();
-    writeFileSync(join(project, "package.json"), JSON.stringify({ private: true, packageManager: "pnpm@1.0.0" }), "utf8");
+    writeFileSync(join(project, "package.json"), JSON.stringify({
+      private: true,
+      packageManager: "pnpm@1.0.0",
+      scripts: { verify: "fixture" },
+    }), "utf8");
     writeFileSync(join(project, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n", "utf8");
     execFileSync("git", ["add", "package.json", "pnpm-lock.yaml"], { cwd: project });
     commitFixture(project, "test: add node stack");
@@ -121,9 +126,10 @@ test("first run, onboarding, dirty confirmation and cleanup", async ({ page }) =
     });
     const browserTicket = page.locator(".card").filter({ hasText: "Browser ticket" });
     await browserTicket.getByRole("button", { name: "Run", exact: true }).click();
-    await expect(page.getByRole("heading", { name: "Allow reproducible setup?" })).toBeVisible();
-    await expect(page.locator("#preparation-commands")).toContainText("pnpm install --frozen-lockfile");
-    const firstFingerprint = await page.locator("#preparation-fingerprint").textContent();
+    await expect(page.getByRole("heading", { name: "Allow workspace setup and verification?" })).toBeVisible();
+    await expect(page.locator("#workspace-approval-commands")).toContainText("pnpm install --frozen-lockfile");
+    await expect(page.locator("#workspace-approval-commands")).toContainText("pnpm run verify");
+    const firstFingerprint = await page.locator("#workspace-approval-fingerprint").textContent();
     await page.getByRole("button", { name: "Approve for this project" }).click();
     await expect(browserTicket.getByText("BLOCKED", { exact: true })).toBeVisible();
     await expect(browserTicket.getByText(/base_checkout_dirty/u)).toBeVisible();
@@ -140,7 +146,7 @@ test("first run, onboarding, dirty confirmation and cleanup", async ({ page }) =
     const reused = page.locator(".card").filter({ hasText: "Approval reuse" });
     await reused.getByRole("button", { name: "Run", exact: true }).click();
     await expect(reused.getByText("DONE", { exact: true })).toBeVisible();
-    await expect(page.locator("#preparation-dialog")).not.toBeVisible();
+    await expect(page.locator("#workspace-approval-dialog")).not.toBeVisible();
 
     writeFileSync(join(project, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\nrevision: 2\n", "utf8");
     execFileSync("git", ["add", "pnpm-lock.yaml"], { cwd: project });
@@ -150,8 +156,8 @@ test("first run, onboarding, dirty confirmation and cleanup", async ({ page }) =
     await page.getByRole("button", { name: "Create", exact: true }).click();
     const changedLock = page.locator(".card").filter({ hasText: "Changed lock" });
     await changedLock.getByRole("button", { name: "Run", exact: true }).click();
-    await expect(page.locator("#preparation-dialog")).toBeVisible();
-    expect(await page.locator("#preparation-fingerprint").textContent()).not.toBe(firstFingerprint);
+    await expect(page.locator("#workspace-approval-dialog")).toBeVisible();
+    expect(await page.locator("#workspace-approval-fingerprint").textContent()).not.toBe(firstFingerprint);
     await page.getByRole("button", { name: "Approve for this project" }).click();
     await expect(changedLock.getByText("DONE", { exact: true })).toBeVisible();
 
@@ -160,21 +166,38 @@ test("first run, onboarding, dirty confirmation and cleanup", async ({ page }) =
     commitFixture(project, "test: add second stack");
     await page.getByRole("button", { name: "Settings", exact: true }).click();
     await page.locator("#preparation-mode").selectOption("explicit");
-    await page.getByRole("button", { name: "Add unit" }).click();
+    await page.locator("#add-preparation-unit").click();
     await page.locator("[data-preparation-strategy]").nth(1).selectOption("go");
-    await page.getByRole("button", { name: "Save preparation" }).click();
+    await Promise.all([
+      page.waitForResponse((response) => response.url().endsWith("/preparation/config") && response.request().method() === "PUT"),
+      page.getByRole("button", { name: "Save preparation" }).click(),
+    ]);
     await expect(page.locator("[data-preparation-unit]")).toHaveCount(2);
+    await page.locator("#verification-mode").selectOption("explicit");
+    await page.locator("#add-verification-unit").click();
+    await page.locator("[data-verification-strategy]").nth(1).selectOption("go");
+    await Promise.all([
+      page.waitForResponse((response) => response.url().endsWith("/verification/config") && response.request().method() === "PUT"),
+      page.getByRole("button", { name: "Save verification" }).click(),
+    ]);
+    await expect(page.locator("[data-verification-unit]")).toHaveCount(2);
     await page.getByRole("button", { name: "Tickets", exact: true }).click();
     await page.locator("#ticket-title").fill("Multistack ticket");
     await page.locator("#ticket-description").fill("Prepare Node and Go in order");
     await page.getByRole("button", { name: "Create", exact: true }).click();
     const multistack = page.locator(".card").filter({ hasText: "Multistack ticket" });
     await multistack.getByRole("button", { name: "Run", exact: true }).click();
-    await expect(page.locator("#preparation-commands")).toContainText("go mod verify");
+    await expect(page.locator("#workspace-approval-commands")).toContainText("go mod verify");
+    await expect(page.locator("#workspace-approval-commands")).toContainText("go test ./...");
     await page.getByRole("button", { name: "Approve for this project" }).click();
     await expect(multistack.getByText("DONE", { exact: true })).toBeVisible();
 
-    writeFileSync(join(project, "package.json"), JSON.stringify({ private: true, packageManager: "pnpm@1.0.0", raycoderPreparationFailOnce: true }), "utf8");
+    writeFileSync(join(project, "package.json"), JSON.stringify({
+      private: true,
+      packageManager: "pnpm@1.0.0",
+      scripts: { verify: "fixture" },
+      raycoderPreparationFailOnce: true,
+    }), "utf8");
     execFileSync("git", ["add", "package.json"], { cwd: project });
     commitFixture(project, "test: request one failed preparation");
     await page.locator("#ticket-title").fill("Preparation retry");
@@ -193,6 +216,8 @@ test("first run, onboarding, dirty confirmation and cleanup", async ({ page }) =
     await page.getByRole("button", { name: "Settings", exact: true }).click();
     await expect(page.locator("#preparation-mode")).toHaveValue("explicit");
     await expect(page.locator("[data-preparation-unit]")).toHaveCount(2);
+    await expect(page.locator("#verification-mode")).toHaveValue("explicit");
+    await expect(page.locator("[data-verification-unit]")).toHaveCount(2);
     await page.getByRole("button", { name: "Tickets", exact: true }).click();
     await expect(page.locator(".card").filter({ hasText: "Preparation retry" }).getByText("DONE", { exact: true })).toBeVisible();
 

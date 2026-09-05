@@ -10,6 +10,7 @@ import type { ProjectVerifier, VerificationResult } from "../src/project-verifie
 import { RecoveryService } from "../src/recovery.js";
 import { TicketRepository } from "../src/ticket-repository.js";
 import { WorkspacePreparationService, type WorkspacePreparationError } from "../src/workspace-preparation.js";
+import { WorkspaceVerificationService, type WorkspaceVerificationError } from "../src/workspace-verification.js";
 
 const temporaryDirectories: string[] = [];
 const runner = new NodeProcessRunner();
@@ -245,6 +246,54 @@ describe("IntegrationService", () => {
     expect(verifier.calls).toBe(1);
     fixture.repository.close();
   }, 20_000);
+
+  it("applies durable verification approval to a moved-base reconciliation worktree", async () => {
+    const fixture = await createFixture({ nodeStack: true });
+    await commitBaseChange(fixture.projectRoot, "base.txt", "advanced\n");
+    const workspaceRunner = new IntegrationPreparationRunner();
+    const preparation = new WorkspacePreparationService(
+      fixture.repository,
+      new GitWorkspaceManager(workspaceRunner),
+      workspaceRunner,
+    );
+    const verification = new WorkspaceVerificationService(fixture.repository, workspaceRunner);
+    const integration = new IntegrationService(fixture.repository, fixture.projectRoot, "auto", {
+      runner: workspaceRunner,
+      preparation,
+      verification,
+    });
+
+    let preparationFingerprint = "";
+    await integration.prepare(fixture.ticketId).catch((error: WorkspacePreparationError) => {
+      expect(error.code).toBe("preparation.approval_required");
+      preparationFingerprint = (error.details as { plan: { fingerprint: string } }).plan.fingerprint;
+    });
+    let verificationFingerprint = "";
+    await integration.retry(fixture.ticketId, {
+      fingerprint: preparationFingerprint,
+      allowNetwork: true,
+      allowInstallScripts: true,
+      rememberForProject: true,
+    }).catch((error: WorkspaceVerificationError) => {
+      expect(error.code).toBe("verification.approval_required");
+      verificationFingerprint = (error.details as { plan: { fingerprint: string } }).plan.fingerprint;
+    });
+
+    const outcome = await integration.retry(fixture.ticketId, undefined, {
+      fingerprint: verificationFingerprint,
+      allowVerification: true,
+      rememberForProject: true,
+    });
+
+    expect(outcome.kind).toBe("integrated");
+    expect(outcome.attempt.verificationStatus).toBe("PASSED");
+    expect(fixture.repository.latestWorkspaceVerificationAttempt(fixture.ticketId, "integration")).toMatchObject({
+      status: "PASSED",
+      integrationAttemptId: outcome.attempt.id,
+    });
+    expect(workspaceRunner.dependencies).toContain("pnpm run verify");
+    fixture.repository.close();
+  }, 20_000);
 });
 
 class StaticVerifier implements ProjectVerifier {
@@ -268,7 +317,11 @@ async function createFixture(
   await git(projectRoot, ["config", "user.email", "tests@raycoder.local"]);
   writeFileSync(join(projectRoot, "README.md"), "base\n", "utf8");
   if (options.nodeStack === true) {
-    writeFileSync(join(projectRoot, "package.json"), JSON.stringify({ private: true, packageManager: "pnpm@11.19.0" }), "utf8");
+    writeFileSync(join(projectRoot, "package.json"), JSON.stringify({
+      private: true,
+      packageManager: "pnpm@11.19.0",
+      scripts: { verify: "fixture" },
+    }), "utf8");
     writeFileSync(join(projectRoot, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n", "utf8");
   }
   await git(projectRoot, ["add", "."]);

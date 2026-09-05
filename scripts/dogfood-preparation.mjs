@@ -69,6 +69,7 @@ try {
   let runtime = await core.ProjectRuntime.open(projectRoot, {
     adapter: new core.FakeAgentAdapter({ fileName: "prepared-dogfood.txt" }),
     runner: preparationRunner,
+    workspaceVerification: false,
   });
   runtime.preparation.setConfig({
     mode: "explicit",
@@ -110,7 +111,9 @@ try {
   if (JSON.stringify(commands) !== JSON.stringify(expected)) throw new Error(`Unexpected preparation order: ${JSON.stringify(commands)}`);
   runtime.close();
 
-  runtime = await core.ProjectRuntime.open(projectRoot, { adapter: new core.FakeAgentAdapter(), runner: preparationRunner });
+  runtime = await core.ProjectRuntime.open(projectRoot, {
+    adapter: new core.FakeAgentAdapter(), runner: preparationRunner, workspaceVerification: false,
+  });
   if (runtime.preparation.approval()?.fingerprint !== fingerprint) throw new Error("Project approval did not survive restart");
   if (runtime.repository.latestWorkspacePreparationAttempt("prepare-all")?.status !== "PREPARED") throw new Error("Prepared status did not survive restart");
   runtime.close();

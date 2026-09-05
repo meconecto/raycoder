@@ -38,7 +38,7 @@ const limitedPreflight: PreflightReport = {
 function setup(): { projects: ProjectManager; host: RaycoderApplicationHost } {
   const global = mkdtempSync(join(tmpdir(), "raycoder-host-global-"));
   temporaryDirectories.push(global);
-  const projects = new ProjectManager(new ProjectRegistry(join(global, "projects.db")), () => ({ adapter: new FakeAgentAdapter() }));
+  const projects = new ProjectManager(new ProjectRegistry(join(global, "projects.db")), () => ({ adapter: new FakeAgentAdapter(), workspaceVerification: false }));
   const config = new GlobalConfigStore(join(global, "config.json"));
   return {
     projects,
