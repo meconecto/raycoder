@@ -21,6 +21,9 @@ const catalogs = {
     startIdea: "Describe the feature you want to build", continuePlan: "Continue the planning conversation", approveSpec: "Review and approve the SPEC",
     approveTickets: "Review and confirm the ticket plan", runTicket: "Run the next ready ticket", resolveAttention: "Resolve the latest issue",
     complete: "All confirmed tickets are done", go: "Open", ideaPlan: "Idea / Plan", execution: "Execution", integration: "Integration",
+    autoMode: "Auto mode", manualDefault: "Manual by default", autoDescription: "Opt in to run eligible tickets one at a time. Auto pauses on approvals, failures, provider limits or human intervention.",
+    startAuto: "Start Auto", pauseAuto: "Pause", resumeAuto: "Resume Auto", stopAuto: "Stop Auto", approveAndResumeAuto: "Approve and resume",
+    currentTicket: "Current ticket", plannedQueue: "Planned queue", emptyQueue: "No eligible tickets", none: "None", recentAutoEvents: "Recent Auto events",
   },
   es: {
     projects: "Proyectos", runtime: "Entorno", addProject: "+ Agregar proyecto", localWorkspace: "Workspace local",
@@ -44,6 +47,9 @@ const catalogs = {
     startIdea: "Describí la funcionalidad que querés construir", continuePlan: "Continuá la conversación de planificación", approveSpec: "Revisá y aprobá la SPEC",
     approveTickets: "Revisá y confirmá el plan de tickets", runTicket: "Ejecutá el próximo ticket listo", resolveAttention: "Resolvé el último inconveniente",
     complete: "Todos los tickets confirmados están terminados", go: "Abrir", ideaPlan: "Idea / Plan", execution: "Ejecución", integration: "Integración",
+    autoMode: "Modo Auto", manualDefault: "Manual por defecto", autoDescription: "Activá Auto para ejecutar de a un ticket elegible. Se pausa ante aprobaciones, fallos, límites del proveedor o intervención humana.",
+    startAuto: "Iniciar Auto", pauseAuto: "Pausar", resumeAuto: "Reanudar Auto", stopAuto: "Detener Auto", approveAndResumeAuto: "Aprobar y reanudar",
+    currentTicket: "Ticket actual", plannedQueue: "Cola prevista", emptyQueue: "No hay tickets elegibles", none: "Ninguno", recentAutoEvents: "Eventos Auto recientes",
   },
 };
 

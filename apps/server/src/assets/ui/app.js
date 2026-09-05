@@ -135,8 +135,8 @@ function base() {
 
 async function refreshProject() {
   if (!state.project) return;
-  const [ticketData, dependencyData, planning, capabilities, inspection, preparation, verification, activity] = await Promise.all([
-    json(`${base()}/tickets`), json(`${base()}/dependencies`), json(`${base()}/planning`), json(`${base()}/capabilities`), json(`${base()}/inspection`), json(`${base()}/preparation`), json(`${base()}/verification`), json(`${base()}/activity`),
+  const [ticketData, dependencyData, planning, capabilities, inspection, preparation, verification, activity, auto] = await Promise.all([
+    json(`${base()}/tickets`), json(`${base()}/dependencies`), json(`${base()}/planning`), json(`${base()}/capabilities`), json(`${base()}/inspection`), json(`${base()}/preparation`), json(`${base()}/verification`), json(`${base()}/activity`), json(`${base()}/auto`),
   ]);
   state.tickets = ticketData.tickets;
   state.dependencies = dependencyData.dependencies;
@@ -146,6 +146,7 @@ async function refreshProject() {
   state.preparation = preparation;
   state.verification = verification;
   state.activity = activity;
+  state.auto = auto;
   const entry = state.projects.find((candidate) => candidate.project.id === state.project.id);
   if (entry) entry.attention = activity.summary;
   renderProjects();
@@ -183,6 +184,31 @@ function ticketCard(ticket) {
   return `<article class="card"><div class="row"><h3>${esc(ticket.title)}</h3><span class="status ${esc(ticket.status)}">${esc(ticket.status)}</span></div><p>${esc(ticket.description)}</p><small class="muted">${esc(ticket.id)}${ticket.branch ? ` · ${esc(ticket.branch)}` : ""}</small>${preparation ? `<p><small>Preparation: <span class="status ${esc(preparation.status)}">${esc(preparation.status)}</span> · ${esc(preparation.strategy)}</small></p>` : ""}${preparation?.diagnosticDetail ? `<p class="error">${esc(preparation.diagnosticCode)} · ${esc(preparation.diagnosticDetail)}</p>` : ""}${preparation?.output ? `<details><summary>Preparation output</summary><pre>${esc(preparation.output.slice(0, 2_000))}</pre></details>` : ""}${verification ? `<p><small>Verification: <span class="status ${esc(verification.status)}">${esc(verification.status)}</span> · ${esc(verification.strategy)}</small></p>` : ""}${verification?.diagnosticDetail ? `<p class="error">${esc(verification.diagnosticCode)} · ${esc(verification.diagnosticDetail)}</p>` : ""}${verification?.output ? `<details><summary>Verification output</summary><pre>${esc(verification.output.slice(0, 2_000))}</pre></details>` : ""}${ticket.review ? `<p><small>Review: ${esc(ticket.review.verdict)} — ${esc(ticket.review.summary)}</small></p>` : ""}${attempt?.diagnosticCode ? `<p class="error">${esc(attempt.diagnosticCode)} · ${esc(attempt.diagnosticDetail)}</p>` : ""}<div class="actions">${buttons.join("")}</div></article>`;
 }
 
+function renderAutoPanel() {
+  const snapshot = state.auto || { enabled: false, run: null, events: [], queue: [] };
+  const run = snapshot.run;
+  const active = run && ["RUNNING", "PAUSED"].includes(run.status);
+  const eligible = eligibility();
+  const queue = (snapshot.queue || []).map((ticket) => ticket.id);
+  const current = run?.currentTicketId ? state.tickets.find((ticket) => ticket.id === run.currentTicketId) : null;
+  const needsWorkspaceApproval = run?.status === "PAUSED"
+    && ["preparation.approval_required", "preparation.plan_changed", "verification.approval_required", "verification.plan_changed"].includes(run.reasonCode);
+  const controls = run?.status === "RUNNING"
+    ? `<button data-auto-action="pause">${t("pauseAuto")}</button><button data-auto-action="stop">${t("stopAuto")}</button>`
+    : run?.status === "PAUSED"
+      ? `${needsWorkspaceApproval ? `<button data-auto-approve class="primary">${t("approveAndResumeAuto")}</button>` : `<button data-auto-action="resume" class="primary" ${eligible.allowed ? "" : "disabled"}>${t("resumeAuto")}</button>`}<button data-auto-action="stop">${t("stopAuto")}</button>`
+      : `<button data-auto-action="start" class="primary" ${eligible.allowed ? "" : "disabled"}>${t("startAuto")}</button>`;
+  const recent = (snapshot.events || []).slice(-6).reverse();
+  return `<article class="card auto-panel">
+    <div class="row"><div><p class="kicker">${t("autoMode")}</p><h2>${active ? esc(run.status) : t("manualDefault")}</h2></div><span class="status ${esc(run?.status || "MANUAL")}">${esc(run?.status || "MANUAL")}</span></div>
+    <p>${t("autoDescription")}</p>
+    ${run?.reasonCode ? `<div class="auto-reason"><strong>${esc(run.reasonCode)}</strong><p>${esc(run.reasonDetail || "")}</p></div>` : ""}
+    <div class="auto-grid"><div><small>${t("currentTicket")}</small><strong>${esc(current?.title || run?.currentTicketId || t("none"))}</strong></div><div><small>${t("plannedQueue")}</small><strong>${queue.length ? queue.map(esc).join(" → ") : t("emptyQueue")}</strong></div></div>
+    <div class="actions">${controls}</div>
+    ${recent.length ? `<details><summary>${t("recentAutoEvents")}</summary><div class="event-list">${recent.map((event) => `<small><span>${esc(event.type)}</span>${esc(event.ticketId || event.reasonCode || "")}</small>`).join("")}</div></details>` : ""}
+  </article>`;
+}
+
 function renderOverview() {
   const counts = Object.fromEntries(state.tickets.map((ticket) => ticket.status).map((status) => [status, state.tickets.filter((ticket) => ticket.status === status).length]));
   const ready = eligibility();
@@ -190,6 +216,7 @@ function renderOverview() {
   content.className = "stack";
   content.innerHTML = `
     <article class="next-action card"><div><p class="kicker">${t("nextAction")}</p><h2>${esc(next.label)}</h2></div><button class="primary" data-go-tab="${esc(next.tab)}">${t("go")}</button></article>
+    ${renderAutoPanel()}
     <div class="grid">
       <article class="card"><h3>Repository</h3><p>${esc(state.inspection.branch || "unborn branch")} · ${state.inspection.head ? esc(state.inspection.head.slice(0, 10)) : "no baseline"} · ${state.inspection.dirty ? "dirty" : "clean"}</p></article>
       <article class="card"><h3>Tickets</h3><p>${state.tickets.length} total · ${counts.DONE || 0} done · ${counts.READY || 0} ready</p></article>
@@ -425,7 +452,7 @@ function renderDetectedVerification(verification) {
 
 function renderTickets() {
   content.className = "stack";
-  content.innerHTML = `<div class="grid">${state.tickets.map(ticketCard).join("") || '<div class="empty">No tickets.</div>'}</div><article class="card"><h3>Create ticket</h3><input id="ticket-title" placeholder="Title"><textarea id="ticket-description" placeholder="What this vertical slice delivers"></textarea><input id="ticket-predecessors" placeholder="Predecessor ids, comma separated"><button id="create-ticket" class="primary">Create</button></article>`;
+  content.innerHTML = `${renderAutoPanel()}<div class="grid">${state.tickets.map(ticketCard).join("") || '<div class="empty">No tickets.</div>'}</div><article class="card"><h3>Create ticket</h3><input id="ticket-title" placeholder="Title"><textarea id="ticket-description" placeholder="What this vertical slice delivers"></textarea><input id="ticket-predecessors" placeholder="Predecessor ids, comma separated"><button id="create-ticket" class="primary">Create</button></article>`;
 }
 
 function renderDag() {
@@ -455,6 +482,7 @@ function activityAction(item) {
   if (item.action === "retry_planning" && item.sessionId) return `<button data-planning-retry="${esc(item.sessionId)}">${t("retry")}</button>`;
   if (item.action === "resume_planning" && item.sessionId) return `<button data-planning-resume="${esc(item.sessionId)}">${t("resume")}</button>`;
   if (item.action === "open_ticket" && item.ticketId) return `<button data-open-ticket="${esc(item.ticketId)}">${t("openTicket")}</button>`;
+  if (item.action === "open_auto") return `<button data-go-tab="tickets">${t("openTicket")}</button>`;
   if (item.action === "open_settings" || item.action === "approve_preparation") return `<button data-go-tab="settings">${t("openSettings")}</button>`;
   if (item.action === "confirm_integration" && item.ticketId) return `<button data-open-ticket="${esc(item.ticketId)}">${t("openTicket")}</button>`;
   return "";
@@ -505,7 +533,7 @@ async function renderSettings() {
     <details><summary>Raw effective configuration</summary><pre>${esc(JSON.stringify(effective, null, 2))}</pre></details>
   </article><article class="card"><h3>Workspace preparation</h3><p>Auto-detection handles one unambiguous root stack. Mixed repositories use ordered units; shell steps must point to tracked Bash or PowerShell files.</p><label>Detection mode<select id="preparation-mode"><option value="auto" ${preparation.config.mode === "auto" ? "selected" : ""}>Auto-detect root stack</option><option value="explicit" ${preparation.config.mode === "explicit" ? "selected" : ""}>Explicit ordered units</option></select></label><div id="preparation-unit-editor" class="ticket-plan-rows ${preparation.config.mode === "explicit" ? "" : "hidden"}">${units.map(preparationUnitRow).join("")}</div><div class="actions"><button id="add-preparation-unit" class="${preparation.config.mode === "explicit" ? "" : "hidden"}">Add unit</button><button id="save-preparation" class="primary">Save preparation</button><button id="revoke-preparation" ${preparation.approval ? "" : "disabled"}>Revoke approval</button></div>${renderDetectedPreparation(preparation)}</article>
   <article class="card"><h3>Workspace verification</h3><p>Verification runs after implementation and before review. Mixed repositories use ordered units; unknown conventions block instead of guessing.</p><label>Detection mode<select id="verification-mode"><option value="auto" ${verification.config.mode === "auto" ? "selected" : ""}>Auto-detect root stack</option><option value="explicit" ${verification.config.mode === "explicit" ? "selected" : ""}>Explicit ordered units</option></select></label><div id="verification-unit-editor" class="ticket-plan-rows ${verification.config.mode === "explicit" ? "" : "hidden"}">${verificationUnits.map(verificationUnitRow).join("")}</div><div class="actions"><button id="add-verification-unit" class="${verification.config.mode === "explicit" ? "" : "hidden"}">Add unit</button><button id="save-verification" class="primary">Save verification</button><button id="revoke-verification" ${verification.approval ? "" : "disabled"}>Revoke approval</button></div>${renderDetectedVerification(verification)}</article>
-  <article class="card"><h3>Future Auto mode</h3><p>Automatic sequential ticket execution is planned as an opt-in feature. Manual Run remains the default.</p></article><article class="card"><h3>Safe cleanup</h3><p>Preview registered worktrees, branches, metadata and global registration before deleting anything.</p><button id="plan-cleanup" class="danger-button">Build cleanup plan</button></article>`;
+  <article class="card"><h3>Safe cleanup</h3><p>Preview registered worktrees, branches, metadata and global registration before deleting anything.</p><button id="plan-cleanup" class="danger-button">Build cleanup plan</button></article>`;
 }
 
 function stageSettingsRow(stage, selected) {
@@ -587,6 +615,28 @@ async function executeTicketAction(ticketId, body) {
     }
     throw error;
   }
+}
+
+async function executeAutoAction(body) {
+  return await json(`${base()}/auto/actions`, mutation(body));
+}
+
+async function showAutoWorkspaceApproval() {
+  const run = state.auto?.run;
+  if (!run?.currentTicketId) throw new Error("Auto has no ticket awaiting workspace approval");
+  const ticket = state.tickets.find((candidate) => candidate.id === run.currentTicketId);
+  const sourceKind = run.reasonCode?.startsWith("verification.") ? "verification" : "preparation";
+  const attempt = sourceKind === "verification" ? ticket?.verification : ticket?.preparation;
+  if (!attempt?.plan) throw new Error(run.reasonDetail || "The durable workspace plan is unavailable");
+  const error = Object.assign(new Error(run.reasonDetail || "Workspace approval required"), {
+    code: run.reasonCode,
+    details: { plan: attempt.plan },
+  });
+  await showWorkspaceApproval(error, {
+    auto: true,
+    ticketId: run.currentTicketId,
+    body: { action: "resume", runId: run.id },
+  });
 }
 
 async function refreshPreview() {
@@ -727,6 +777,22 @@ $("#content").addEventListener("click", (event) => {
     return;
   }
   if (target.dataset.openTicket) { selectTab("tickets"); return; }
+  if (target.dataset.autoAction) {
+    void action(async () => {
+      const body = { action: target.dataset.autoAction, runId: state.auto?.run?.id };
+      if (body.action === "start") {
+        delete body.runId;
+        if (state.inspection.dirty) {
+          const proceed = window.confirm("The main checkout is dirty. Start Auto from committed HEAD? Local changes will stay outside ticket workspaces.");
+          if (!proceed) return;
+          body.dirtyPolicy = "committed-head";
+        } else body.dirtyPolicy = "cancel";
+      }
+      await executeAutoAction(body);
+    });
+    return;
+  }
+  if (target.dataset.autoApprove !== undefined) { void action(showAutoWorkspaceApproval, false); return; }
   if (target.dataset.ticketAction) {
     void action(async () => {
       const body = { action: target.dataset.ticketAction };
@@ -841,7 +907,8 @@ $("#approve-workspace").addEventListener("click", () => void action(async () => 
     ...(pending.preparationFingerprint ? { preparationApproval: { fingerprint: pending.preparationFingerprint, allowNetwork: true, allowInstallScripts: true, rememberForProject: true } } : {}),
     ...(pending.verificationFingerprint ? { verificationApproval: { fingerprint: pending.verificationFingerprint, allowVerification: true, rememberForProject: true } } : {}),
   };
-  await executeTicketAction(pending.request.ticketId, { ...pending.request.body, ...approvals });
+  if (pending.request.auto) await executeAutoAction({ ...pending.request.body, ...approvals });
+  else await executeTicketAction(pending.request.ticketId, { ...pending.request.body, ...approvals });
 }, false));
 
 async function boot() {
