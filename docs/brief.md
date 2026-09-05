@@ -1,4 +1,4 @@
-# raycoder — brief v21 (fundación de usabilidad y diagnóstico accionable)
+# raycoder — brief v22 (verificación durable y multistack)
 
 ## Qué es esto
 
@@ -175,6 +175,32 @@ bloquea el ticket para inspección.
 
 `implement` intenta seguir TDD en los seams verificables. Cuando el proyecto no tiene una estrategia de testing razonable, el agente documenta el mecanismo de verificación alternativo antes de implementar, en vez de imponer tests artificiales.
 
+La verificación autoritativa no depende de que el agente afirme haber corrido tests. El core
+construye y persiste un plan reproducible por workspace, lo ejecuta después del commit de
+implementación y antes de `REVIEW`, y conserva cada intento, comando, salida sanitizada,
+diagnóstico y fingerprint. Los estados de la verificación son ortogonales al lifecycle del ticket:
+`AWAITING_APPROVAL`, `QUEUED`, `VERIFYING`, `PASSED`, `FAILED`, `UNAVAILABLE`, `CANCELLED` e
+`INTERRUPTED`.
+
+La autodetección sólo se aplica a un stack inequívoco en la raíz. Node conserva `verify` o la
+secuencia disponible `typecheck`, `lint`, `test`, `build`; uv usa `uv run --locked pytest`, Poetry
+`poetry run pytest`, Pipenv `pipenv run pytest` sin cargar `.env`, Rust `cargo test --locked` y Go
+`go test ./...` con módulos read-only. Monorepos y repos mixtos requieren unidades explícitas y
+ordenadas. Bash y PowerShell sólo ejecutan scripts regulares, versionados y contenidos en el
+repositorio, con argumentos literales y sin interpolación.
+
+La autorización del workspace cubre preparación y verificación y muestra ambos planes antes de
+iniciar el agente. Su fingerprint incluye comandos, plataforma, herramientas y versiones,
+manifests, locks y scripts. Una aprobación anterior a este contrato se invalida una sola vez. El
+plan se recalcula inmediatamente antes de ejecutarse; si el agente cambió una entrada relevante,
+se exige una nueva aprobación. Un mecanismo ausente o ambiguo bloquea con diagnóstico y acceso
+directo a Settings: raycoder nunca inventa comandos.
+
+Fallo, cancelación o reinicio preservan el workspace y el intento. `QUEUED` o `VERIFYING` se
+recuperan como `INTERRUPTED`; SQLite nunca prueba que el proceso externo siga vivo. La salida se
+limita y sanitiza, y una verificación que introduce cambios versionados adicionales falla. La
+misma política se aplica al resultado reconciliado cuando la base se movió.
+
 ## Lifecycle y recovery del ticket
 
 ```
@@ -228,7 +254,10 @@ reconciliar contra el head actual de base_branch
 - **`auto` (default):** integra automáticamente cuando la reconciliación es limpia y la verificación aplicable pasa. Requiere intervención humana solo ante conflicto o verificación fallida.
 - **`confirm`:** siempre pide confirmación explícita del usuario antes de tocar la branch base.
 
-**Verificación condicional:** raycoder corre la verificación del proyecto sobre el resultado reconciliado **solo si el head de la `base_branch` se movió respecto de `base_commit`**. Si no se movió, el árbol a integrar es exactamente el que el agente ya verificó durante `implement`, y no se vuelve a verificar. Esto atrapa el caso que git no detecta: un merge textualmente limpio pero semánticamente roto (por ejemplo, algo que entró a la base renombró código que el ticket usa).
+**Verificación condicional de integración:** raycoder vuelve a correr el plan durable sobre el
+resultado reconciliado **solo si el head de la `base_branch` se movió respecto de `base_commit`**.
+Si no se movió, reutiliza la verificación autoritativa que pasó antes de revisión. Esto atrapa el
+caso que git no detecta: un merge textualmente limpio pero semánticamente roto.
 
 **Si la base se movió pero el proyecto no tiene un mecanismo de verificación disponible** (ver "Política de verificación y TDD"), el ticket pasa a `BLOCKED` para decisión humana en vez de integrarse a ciegas.
 
@@ -428,4 +457,4 @@ Los proveedores siguientes usan un SDK oficial cuando exista y cubra el contrato
 
 **Invariantes técnicas pendientes de definición: ninguna conocida.**
 
-Los mecanismos concretos quedan a criterio de implementación, salvo donde el brief los fija expresamente: el conjunto completo de estados del ticket definido en "Lifecycle y recovery del ticket" y la semántica de `BLOCKED`/`FAILED`/`INTERRUPTED`; desbloqueo del DAG únicamente por `DONE`; ancestry desde el head de la `base_branch` (sin stacked branches); workspace físicamente aislado por ticket; tracking de `base_commit`; verificación condicional a que la base se haya movido; contrato normalizado de eventos; capability discovery; invariante de no-ciclos; preflight parcial no bloqueante; launcher user-local estable con activación atómica y sólo current/previous; preservación de datos y credenciales durante uninstall; y no modificar archivos versionados del usuario.
+Los mecanismos concretos quedan a criterio de implementación, salvo donde el brief los fija expresamente: el conjunto completo de estados del ticket definido en "Lifecycle y recovery del ticket" y la semántica de `BLOCKED`/`FAILED`/`INTERRUPTED`; desbloqueo del DAG únicamente por `DONE`; ancestry desde el head de la `base_branch` (sin stacked branches); workspace físicamente aislado por ticket; tracking de `base_commit`; verificación durable antes de revisión y repetida sobre una reconciliación sólo cuando la base se movió; contrato normalizado de eventos; capability discovery; invariante de no-ciclos; preflight parcial no bloqueante; launcher user-local estable con activación atómica y sólo current/previous; preservación de datos y credenciales durante uninstall; y no modificar archivos versionados del usuario.
