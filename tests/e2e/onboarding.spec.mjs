@@ -40,10 +40,35 @@ test("first run, onboarding, dirty confirmation and cleanup", async ({ page }) =
     await page.locator("#projects [data-project]").click();
     await expect(page.locator("#project-name")).toHaveText("new-project");
 
+    await page.locator("#locale-select").selectOption("es");
+    await page.locator("#theme-select").selectOption("light");
+    await expect(page.locator("html")).toHaveAttribute("lang", "es");
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+    await page.reload();
+    await expect(page.locator("#locale-select")).toHaveValue("es");
+    await expect(page.locator("#theme-select")).toHaveValue("light");
+    await page.locator("#locale-select").selectOption("en");
+    await page.locator("#theme-select").selectOption("dark");
+    await page.locator("#projects [data-project]").click();
+
+    await page.getByRole("button", { name: "Planning", exact: true }).click();
+    await page.locator("#planning-message").fill("[quota-once] Plan a feature without losing my message");
+    await page.getByRole("button", { name: "Send", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Usage limit reached" })).toBeVisible();
+    await expect(page.locator("[data-session-error] details")).toContainText("quota_exhausted");
+    await page.reload();
+    await page.locator("#projects [data-project]").click();
+    await page.getByRole("button", { name: "Planning", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Usage limit reached" })).toBeVisible();
+    await page.locator("[data-session-error] [data-planning-retry]").click();
+    await expect(page.locator(".message.assistant").filter({ hasText: "[quota-once]" })).toContainText("Fake turn 1");
+    await page.getByRole("button", { name: "Activity", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "0 needs attention" })).toBeVisible();
     await page.getByRole("button", { name: "Planning", exact: true }).click();
     await page.locator("#planning-message").fill("Plan a conversational release slice");
     await page.getByRole("button", { name: "Send", exact: true }).click();
-    await expect(page.locator(".message.assistant")).toContainText("Fake turn 1");
+    await expect(page.locator(".message.user").filter({ hasText: "Plan a conversational release slice" })).toBeVisible();
+    await expect(page.locator(".message.assistant").filter({ hasText: "Plan a conversational release slice" })).toContainText("Fake turn 1");
     await page.getByRole("button", { name: "Generate SPEC from conversation" }).click();
     const generatedSpec = page.locator(".artifact-card").filter({ hasText: "spec v1" });
     await expect(generatedSpec).toContainText("Deterministic specification");
@@ -69,14 +94,14 @@ test("first run, onboarding, dirty confirmation and cleanup", async ({ page }) =
     await page.reload();
     await page.locator("#projects [data-project]").click();
     await page.getByRole("button", { name: "Planning", exact: true }).click();
-    await expect(page.locator(".message.user")).toContainText("Plan a conversational release slice");
+    await expect(page.locator(".message.user").filter({ hasText: "Plan a conversational release slice" })).toBeVisible();
     await expect(page.locator(".artifact-card").filter({ hasText: "spec v2" })).toBeVisible();
     await expect(page.locator(".artifact-card").filter({ hasText: "tickets v3" })).toContainText("confirmed");
 
     await page.getByRole("button", { name: "Settings", exact: true }).click();
     await page.getByRole("button", { name: "Validate and save" }).click();
     await page.getByRole("button", { name: "Planning", exact: true }).click();
-    await expect(page.locator(".message.user")).toContainText("Plan a conversational release slice");
+    await expect(page.locator(".message.user").filter({ hasText: "Plan a conversational release slice" })).toBeVisible();
 
     await page.getByRole("button", { name: "Overview", exact: true }).click();
     writeFileSync(join(project, "package.json"), JSON.stringify({ private: true, packageManager: "pnpm@1.0.0" }), "utf8");

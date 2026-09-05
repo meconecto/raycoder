@@ -7,15 +7,34 @@ import { createRaycoderServer } from "../apps/server/dist/server.js";
 const fixtureRoot = mkdtempSync(join(tmpdir(), "raycoder-e2e-host-"));
 const globalConfig = new GlobalConfigStore(join(fixtureRoot, "config.json"));
 await globalConfig.write({
-  version: 2,
+  version: 3,
   integrationMode: "auto",
   reviewMode: "independent",
   stages: Object.fromEntries(["planning", "specification", "ticketing", "implementation", "review"].map((stage) => [
     stage,
     { provider: "fake", model: "deterministic", effort: null },
   ])),
+  ui: { locale: "auto", theme: "system" },
 });
 const nativeRunner = new NodeProcessRunner();
+class E2EAgentAdapter extends FakeAgentAdapter {
+  quotaFailed = false;
+
+  async *send(session, prompt) {
+    if (prompt.includes("[quota-once]") && !this.quotaFailed) {
+      this.quotaFailed = true;
+      yield {
+        type: "error",
+        timestamp: new Date().toISOString(),
+        code: "quota_exhausted",
+        message: "You've hit your usage limit; try again after the reset.",
+      };
+      return;
+    }
+    yield* super.send(session, prompt);
+  }
+}
+const e2eAdapter = new E2EAgentAdapter();
 const failedPreparationRoots = new Set();
 const preparationRunner = {
   async run(command, args, options) {
@@ -33,7 +52,7 @@ const preparationRunner = {
 };
 const projects = new ProjectManager(
   new ProjectRegistry(join(fixtureRoot, "projects.db")),
-  () => ({ adapter: new FakeAgentAdapter(), globalConfigStore: globalConfig, runner: preparationRunner }),
+  () => ({ adapter: e2eAdapter, globalConfigStore: globalConfig, runner: preparationRunner }),
 );
 const memory = new MemoryService({ async run() { throw new Error("Engram intentionally unavailable in E2E"); } }, join(fixtureRoot, "codex.toml"));
 const limited = {
@@ -55,6 +74,7 @@ let preflight = limited;
 const app = {
   projects,
   memory,
+  config: globalConfig,
   get preflight() { return preflight; },
   async refreshPreflight() { preflight = ready; return preflight; },
 };

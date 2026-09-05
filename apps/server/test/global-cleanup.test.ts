@@ -21,8 +21,8 @@ describe("global cleanup", () => {
     mkdirSync(join(root, "unknown-directory"));
 
     const inventory = await inspectGlobalCleanup(root);
-    expect(inventory.knownFiles.sort()).toEqual([".instance-a1b2.tmp", "config.json", "projects.db"]);
-    expect(inventory.preservedEntries.sort()).toEqual(["keep.txt", "unknown-directory"]);
+    expect([...inventory.knownFiles].sort()).toEqual([".instance-a1b2.tmp", "config.json", "projects.db"]);
+    expect([...inventory.preservedEntries].sort()).toEqual(["keep.txt", "unknown-directory"]);
     const remaining = await executeGlobalCleanup(inventory);
     expect(remaining.knownFiles).toEqual([]);
     expect(existsSync(join(root, "keep.txt"))).toBe(true);

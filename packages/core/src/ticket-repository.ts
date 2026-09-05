@@ -214,6 +214,7 @@ export interface PlanningSession {
   readonly stage: PlanningSessionStage;
   readonly request: unknown;
   readonly resumedFromSessionId: string | null;
+  readonly retryOfSessionId: string | null;
   readonly status: PlanningSessionStatus;
   readonly errorCode: string | null;
   readonly errorDetail: string | null;
@@ -231,6 +232,7 @@ interface PlanningSessionRow {
   stage: PlanningSessionStage;
   request_json: string;
   resumed_from_session_id: string | null;
+  retry_of_session_id: string | null;
   status: PlanningSessionStatus;
   error_code: string | null;
   error_detail: string | null;
@@ -814,20 +816,24 @@ export class TicketRepository {
     stage: PlanningSessionStage;
     request: unknown;
     resumedFromSessionId?: string;
+    retryOfSessionId?: string;
     createdAt?: string;
   }): PlanningSession {
     this.getPlanningThread(input.threadId);
     if (input.resumedFromSessionId !== undefined) this.getPlanningSession(input.resumedFromSessionId);
+    if (input.retryOfSessionId !== undefined) this.getPlanningSession(input.retryOfSessionId);
     const createdAt = input.createdAt ?? new Date().toISOString();
     this.#database.prepare(`INSERT INTO planning_sessions (
-      id, thread_id, provider, stage, request_json, resumed_from_session_id, status, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, 'idle', ?, ?)`).run(
+      id, thread_id, provider, stage, request_json, resumed_from_session_id, retry_of_session_id,
+      status, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'idle', ?, ?)`).run(
       input.id,
       input.threadId,
       input.provider,
       input.stage,
       JSON.stringify(input.request),
       input.resumedFromSessionId ?? null,
+      input.retryOfSessionId ?? null,
       createdAt,
       createdAt,
     );
@@ -1462,6 +1468,7 @@ function planningSessionFromRow(row: PlanningSessionRow): PlanningSession {
     stage: row.stage,
     request: JSON.parse(row.request_json) as unknown,
     resumedFromSessionId: row.resumed_from_session_id,
+    retryOfSessionId: row.retry_of_session_id,
     status: row.status,
     errorCode: row.error_code,
     errorDetail: row.error_detail,

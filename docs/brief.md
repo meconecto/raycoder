@@ -1,4 +1,4 @@
-# raycoder — brief v20 (preparación durable de workspaces)
+# raycoder — brief v21 (fundación de usabilidad y diagnóstico accionable)
 
 ## Qué es esto
 
@@ -121,6 +121,32 @@ raycoder **no modifica automáticamente archivos versionados del proyecto ni ree
 Concretamente: `.raycoder/` se excluye mediante mecanismos **locales no versionados** (`.git/info/exclude` cuando el proyecto es un repo Git) — **raycoder nunca edita el `.gitignore` del usuario**.
 
 El servidor acepta solamente assets estáticos allowlisteados. Las mutaciones validan `Host` y, cuando está presente, `Origin`; CLI y tests locales sin `Origin` siguen habilitados. Los errores HTTP usan `{ error, code, details? }`.
+
+## Interfaz y diagnóstico accionable
+
+La interfaz sigue siendo una aplicación web local liviana, sin framework obligatorio. Su navegación
+principal combina las vistas `Overview`, `Plan`, `Tickets` y `Activity` con un progreso compacto
+`Idea/Plan → Tickets → Ejecución → Integración`; DAG, sesiones y ajustes permanecen disponibles
+como herramientas avanzadas. `Overview` ofrece una siguiente acción derivada exclusivamente del
+estado durable, nunca de estado efímero del navegador.
+
+La UI se ofrece en español e inglés y respeta por defecto idioma y esquema de color del sistema.
+El usuario puede fijar idioma y tema claro/oscuro; estas preferencias son globales y se guardan en
+la configuración propia de raycoder. Todo control debe ser usable con teclado, mantener foco
+visible, exponer estados mediante texto además de color y respetar movimiento reducido.
+
+Un estado `error` nunca se representa como una etiqueta genérica ni desaparece al refrescar. La UI
+muestra código durable, explicación localizada, acción permitida y detalle técnico sanitizado. Los
+enlaces y acciones se derivan de un catálogo local allowlisteado; datos del proveedor nunca pueden
+inyectar comandos ni URLs. Errores desconocidos conservan su código y detalle. La actividad por
+proyecto se proyecta desde sesiones, eventos, tickets, preparación e integración ya persistidos;
+el selector conserva para proyectos cerrados un resumen de atención de última observación, sin
+introducir todavía semántica de leído/no leído.
+
+Reintentar una sesión de planificación fallida crea una sesión durable nueva enlazada a la anterior
+y reutiliza su solicitud original. No duplica el mensaje del usuario ni confunde el reintento con la
+reanudación opaca de una sesión `interrupted`. Ningún error de cuota, autenticación o proveedor se
+reintenta automáticamente.
 
 ## Preparación del workspace
 

@@ -4,6 +4,7 @@ import { mkdir, readdir, realpath } from "node:fs/promises";
 import { basename, dirname, resolve } from "node:path";
 import SqliteDatabase from "./sqlite.js";
 import { NodeProcessRunner, type ProcessRunner } from "./process.js";
+import type { ProjectAttentionSummary } from "./project-activity.js";
 
 export interface RegisteredProject {
   readonly id: string;
@@ -19,6 +20,14 @@ interface ProjectRow {
   path: string;
   created_at: string;
   updated_at: string;
+}
+
+interface AttentionRow {
+  project_id: string;
+  count: number;
+  highest_severity: ProjectAttentionSummary["highestSeverity"];
+  latest_code: string | null;
+  latest_at: string | null;
 }
 
 export class ProjectInitializationConfirmationError extends Error {
@@ -45,6 +54,13 @@ export class ProjectRegistry {
         path_key TEXT NOT NULL UNIQUE,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS project_attention (
+        project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+        count INTEGER NOT NULL CHECK (count >= 0),
+        highest_severity TEXT CHECK (highest_severity IN ('warning', 'error')),
+        latest_code TEXT,
+        latest_at TEXT
       );
     `);
   }
@@ -108,6 +124,26 @@ export class ProjectRegistry {
     if (result.changes === 0) throw new Error(`Unknown project: ${id}`);
   }
 
+  public attention(id: string): ProjectAttentionSummary {
+    const row = this.#database.prepare("SELECT * FROM project_attention WHERE project_id = ?").get(id) as AttentionRow | undefined;
+    return row === undefined ? emptyAttention() : {
+      count: row.count,
+      highestSeverity: row.highest_severity,
+      latestCode: row.latest_code,
+      latestAt: row.latest_at,
+    };
+  }
+
+  public setAttention(id: string, attention: ProjectAttentionSummary): void {
+    this.get(id);
+    this.#database.prepare(`INSERT INTO project_attention
+      (project_id, count, highest_severity, latest_code, latest_at) VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(project_id) DO UPDATE SET count = excluded.count,
+        highest_severity = excluded.highest_severity, latest_code = excluded.latest_code,
+        latest_at = excluded.latest_at`)
+      .run(id, attention.count, attention.highestSeverity, attention.latestCode, attention.latestAt);
+  }
+
   #upsert(path: string, name: string): RegisteredProject {
     const key = pathKey(path);
     const existing = this.#database.prepare("SELECT id, name, path, created_at, updated_at FROM projects WHERE path_key = ?")
@@ -123,6 +159,10 @@ export class ProjectRegistry {
       VALUES (?, ?, ?, ?, ?, ?)`).run(id, name, path, key, now, now);
     return this.get(id);
   }
+}
+
+function emptyAttention(): ProjectAttentionSummary {
+  return { count: 0, highestSeverity: null, latestCode: null, latestAt: null };
 }
 
 async function canonicalPath(path: string): Promise<string> {

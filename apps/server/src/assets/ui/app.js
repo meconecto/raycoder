@@ -1,60 +1,25 @@
-const state = {
-  preflight: null,
-  memory: null,
-  projects: [],
-  project: null,
-  projectEntry: null,
-  inspection: null,
-  wizardInspection: null,
-  cleanupPlan: null,
-  tab: "overview",
-  tickets: [],
-  dependencies: [],
-  planning: null,
-  capabilities: null,
-  preparation: null,
-  pendingPreparationAction: null,
-};
+import { json, mutation, mutationMethod } from "./api.js";
+import { configurePreferences, formatDate, t } from "./i18n.js";
+import { diagnosticFor, esc, nextAction } from "./presentation.js";
+import { state } from "./state.js";
 
 const $ = (selector) => document.querySelector(selector);
 const content = $("#content");
 const errorBox = $("#error");
 
-function esc(value) {
-  return String(value ?? "").replace(/[&<>"']/g, (character) => ({
-    "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;",
-  })[character]);
-}
-
-async function json(url, options) {
-  const response = await fetch(url, options);
-  const body = await response.json();
-  if (!response.ok) {
-    const error = new Error(body.error || response.statusText);
-    error.code = body.code;
-    error.details = body.details;
-    throw error;
-  }
-  return body;
-}
-
-function mutation(body) {
-  return { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) };
-}
-
-function mutationMethod(method, body) {
-  return { method, headers: { "content-type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) };
-}
-
 async function loadGlobal() {
-  const [preflight, projects, memory] = await Promise.all([
+  const [preflight, projects, memory, preferenceData] = await Promise.all([
     json("/api/preflight"),
     json("/api/projects"),
     json("/api/memory").catch(() => null),
+    json("/api/preferences").catch(() => ({ preferences: state.preferences })),
   ]);
   state.preflight = preflight;
   state.projects = projects.projects;
   state.memory = memory;
+  state.preferences = preferenceData.preferences;
+  configurePreferences(state.preferences);
+  renderChrome();
   renderProjects();
   renderHealth();
 }
@@ -64,7 +29,25 @@ function renderProjects() {
     <button class="project ${state.project?.id === entry.project.id ? "active" : ""}" data-project="${esc(entry.project.id)}">
       <strong><span class="state-dot ${esc(entry.state)}"></span>${esc(entry.project.name)}</strong>
       <small>${esc(entry.state)} · ${esc(entry.project.path)}</small>
+      ${entry.attention?.count ? `<span class="attention-badge ${esc(entry.attention.highestSeverity)}">${entry.attention.count} · ${t("attention")}</span>` : ""}
     </button>`).join("") || '<p class="muted">No recent projects.</p>';
+}
+
+function renderChrome() {
+  $("#projects-label").textContent = t("projects");
+  $("#runtime-label").textContent = t("runtime");
+  $("#add-project").textContent = t("addProject");
+  $("#language-label").textContent = t("language");
+  $("#theme-label").textContent = t("theme");
+  $("#locale-select").value = state.preferences.locale;
+  $("#theme-select").value = state.preferences.theme;
+  const localeLabels = { auto: "automatic", es: "spanish", en: "english" };
+  const themeLabels = { system: "system", light: "light", dark: "dark" };
+  [...$("#locale-select").options].forEach((option) => { option.textContent = t(localeLabels[option.value]); });
+  [...$("#theme-select").options].forEach((option) => { option.textContent = t(themeLabels[option.value]); });
+  const labels = { overview: "overview", planning: "plan", tickets: "tickets", activity: "activity", dag: "dag", history: "history", sessions: "sessions", settings: "settings" };
+  document.querySelectorAll("[data-tab]").forEach((button) => { button.textContent = t(labels[button.dataset.tab]); });
+  $("#advanced-label").textContent = t("advanced");
 }
 
 function renderHealth() {
@@ -92,8 +75,8 @@ function showLanding() {
   state.projectEntry = null;
   state.inspection = null;
   $("#nav").classList.add("hidden");
-  $("#view-kicker").textContent = "Local workspace";
-  $("#project-name").textContent = "Choose where to work";
+  $("#view-kicker").textContent = t("localWorkspace");
+  $("#project-name").textContent = t("chooseWork");
   $("#project-path").textContent = "";
   renderProjects();
   const providerNote = state.preflight?.canExecute
@@ -151,8 +134,8 @@ function base() {
 
 async function refreshProject() {
   if (!state.project) return;
-  const [ticketData, dependencyData, planning, capabilities, inspection, preparation] = await Promise.all([
-    json(`${base()}/tickets`), json(`${base()}/dependencies`), json(`${base()}/planning`), json(`${base()}/capabilities`), json(`${base()}/inspection`), json(`${base()}/preparation`),
+  const [ticketData, dependencyData, planning, capabilities, inspection, preparation, activity] = await Promise.all([
+    json(`${base()}/tickets`), json(`${base()}/dependencies`), json(`${base()}/planning`), json(`${base()}/capabilities`), json(`${base()}/inspection`), json(`${base()}/preparation`), json(`${base()}/activity`),
   ]);
   state.tickets = ticketData.tickets;
   state.dependencies = dependencyData.dependencies;
@@ -160,16 +143,23 @@ async function refreshProject() {
   state.capabilities = capabilities;
   state.inspection = inspection;
   state.preparation = preparation;
-  render();
+  state.activity = activity;
+  const entry = state.projects.find((candidate) => candidate.project.id === state.project.id);
+  if (entry) entry.attention = activity.summary;
+  renderProjects();
+  const editing = content.contains(document.activeElement)
+    && ["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName);
+  if (!editing) render();
+  else renderProgress();
 }
 
 function render() {
-  errorBox.textContent = "";
   const renderer = {
     overview: renderOverview, planning: renderPlanning, tickets: renderTickets, dag: renderDag,
-    history: renderHistory, sessions: renderSessions, settings: renderSettings,
+    activity: renderActivity, history: renderHistory, sessions: renderSessions, settings: renderSettings,
   }[state.tab];
   renderer();
+  renderProgress();
 }
 
 function eligibility() {
@@ -193,8 +183,10 @@ function ticketCard(ticket) {
 function renderOverview() {
   const counts = Object.fromEntries(state.tickets.map((ticket) => ticket.status).map((status) => [status, state.tickets.filter((ticket) => ticket.status === status).length]));
   const ready = eligibility();
+  const next = nextAction(state);
   content.className = "stack";
   content.innerHTML = `
+    <article class="next-action card"><div><p class="kicker">${t("nextAction")}</p><h2>${esc(next.label)}</h2></div><button class="primary" data-go-tab="${esc(next.tab)}">${t("go")}</button></article>
     <div class="grid">
       <article class="card"><h3>Repository</h3><p>${esc(state.inspection.branch || "unborn branch")} · ${state.inspection.head ? esc(state.inspection.head.slice(0, 10)) : "no baseline"} · ${state.inspection.dirty ? "dirty" : "clean"}</p></article>
       <article class="card"><h3>Tickets</h3><p>${state.tickets.length} total · ${counts.DONE || 0} done · ${counts.READY || 0} ready</p></article>
@@ -214,6 +206,7 @@ function renderPlanning() {
   const latestTickets = artifacts.filter((artifact) => artifact.kind === "tickets").at(-1);
   const active = planning.sessions.find((session) => ["idle", "running"].includes(session.status));
   const interrupted = planning.sessions.filter((session) => session.status === "interrupted");
+  const failed = planning.sessions.filter((session) => session.status === "error" && !planning.sessions.some((candidate) => candidate.retryOfSessionId === session.id));
   const providerDisabled = planning.providerAvailable ? "" : "disabled";
   content.className = "stack";
   content.innerHTML = `
@@ -223,14 +216,15 @@ function renderPlanning() {
     </div>
     <div class="planning-layout">
       <section class="card conversation-panel">
-        <div class="row"><div><p class="kicker">Conversation</p><h2>Shape the work together</h2></div><span class="status">${esc(planning.thread?.status || "not started")}</span></div>
+        <div class="row"><div><p class="kicker">Conversation</p><h2>Shape the work together</h2></div><span class="status ${esc(planning.thread?.status || "idle")}">${esc(planning.thread?.status || "not started")}</span></div>
         <div class="transcript">${planning.messages.filter((message) => message.role !== "system").map((message) => `
-          <div class="message ${esc(message.role)}"><small>${esc(message.role)} · ${new Date(message.createdAt).toLocaleString()}</small><p>${esc(message.content)}</p></div>`).join("") || '<div class="empty compact">Start with the outcome you want. The conversation is stored locally.</div>'}</div>
+          <div class="message ${esc(message.role)}"><small>${esc(message.role)} · ${formatDate(message.createdAt)}</small><p>${esc(message.content)}</p></div>`).join("") || '<div class="empty compact">Start with the outcome you want. The conversation is stored locally.</div>'}</div>
         <div class="composer"><textarea id="planning-message" placeholder="Describe the goal, answer a question, or correct an assumption…" ${providerDisabled}></textarea><button id="send-planning-message" class="primary" ${providerDisabled}>Send</button></div>
       </section>
       <aside class="card operation-panel">
         <p class="kicker">Durable operation</p>
         ${active ? planningOperation(active, planning.events) : '<p class="muted">No generation is running.</p>'}
+        ${failed.map(planningErrorCard).join("")}
         ${interrupted.map((session) => `<div class="interrupted"><strong>${esc(session.stage)} interrupted</strong><small>${esc(session.errorDetail || "The previous runtime stopped.")}</small><button data-planning-resume="${esc(session.id)}" ${providerDisabled}>Resume</button></div>`).join("")}
         ${!planning.providerAvailable ? '<p class="warning">Generation and resume need an executable provider. Approval, editing and DAG confirmation do not.</p>' : ""}
       </aside>
@@ -260,6 +254,22 @@ function renderPlanning() {
         <button id="save-ticket-plan" class="primary" ${approvedSpecs.length === 0 ? "disabled" : ""}>Validate and save revision</button>
       </section>
     </div>`;
+}
+
+function planningErrorCard(session) {
+  const diagnostic = diagnosticFor(session.errorCode);
+  const canRetry = state.planning?.providerAvailable;
+  return `<article class="diagnostic error-severity" data-session-error="${esc(session.id)}">
+    <div class="row"><div><p class="kicker">${esc(session.stage)} · ${formatDate(session.completedAt || session.updatedAt)}</p><h3>${esc(diagnostic.title)}</h3></div><span class="status error">error</span></div>
+    <p>${esc(diagnostic.body)}</p>
+    <div class="actions">
+      ${diagnostic.action === "retry" || diagnostic.action === null ? `<button class="primary" data-planning-retry="${esc(session.id)}" ${canRetry ? "" : "disabled"}>${t("retry")}</button>` : ""}
+      ${diagnostic.action === "auth_help" ? `<a class="button" href="https://learn.chatgpt.com/docs/auth" target="_blank" rel="noreferrer">${t("authHelp")}</a>` : ""}
+      ${diagnostic.action === "open_settings" ? `<button data-go-tab="settings">${t("openSettings")}</button>` : ""}
+      <button data-copy-session="${esc(session.id)}">${t("copyDiagnostic")}</button>
+    </div>
+    <details><summary>${t("technicalDetails")}</summary><pre>${esc(`${session.errorCode || "planning.error"}\n${session.errorDetail || "No detail"}`)}</pre></details>
+  </article>`;
 }
 
 function planningOperation(session, events) {
@@ -377,6 +387,44 @@ function renderDag() {
   content.innerHTML = `<p class="muted">Read-only dependency graph. Only DONE satisfies an edge.</p><div class="dag">${state.tickets.map((ticket) => { const blockers = state.dependencies.filter((edge) => edge.ticketId === ticket.id).map((edge) => edge.predecessorId); return `<article class="card node"><div class="row"><strong>${esc(ticket.title)}</strong><span class="status ${esc(ticket.status)}">${esc(ticket.status)}</span></div><p class="edge">blocked by: ${blockers.map(esc).join(", ") || "none"}</p></article>`; }).join("")}</div>`;
 }
 
+function renderActivity() {
+  content.className = "stack";
+  const items = state.activity?.items ?? [];
+  content.innerHTML = `<section><div class="row"><div><p class="kicker">${t("activity")}</p><h2>${state.activity?.summary?.count ?? 0} ${t("attention")}</h2></div></div>
+    <div class="activity-list">${items.map((item) => {
+      const diagnostic = diagnosticFor(item.code);
+      const title = item.severity === "info" ? item.title : diagnostic.title;
+      return `<article class="activity-item ${esc(item.severity)} ${item.resolved ? "resolved" : ""}">
+        <span class="activity-marker" aria-hidden="true"></span><div><div class="row"><strong>${esc(title)}</strong><time datetime="${esc(item.occurredAt)}">${formatDate(item.occurredAt)}</time></div>
+        <p>${esc(item.severity === "info" ? item.detail || item.status : diagnostic.body)}</p>
+        <small>${esc(item.source)} · ${esc(item.status)}${item.code ? ` · ${esc(item.code)}` : ""}${item.resolved ? " · resolved" : ""}</small>
+        ${item.detail && item.severity !== "info" ? `<details><summary>${t("technicalDetails")}</summary><pre>${esc(item.detail)}</pre></details>` : ""}
+        <div class="actions">${activityAction(item)}</div></div>
+      </article>`;
+    }).join("") || `<div class="empty">${t("noActivity")}</div>`}</div></section>`;
+}
+
+function activityAction(item) {
+  if (item.resolved) return "";
+  if (item.action === "retry_planning" && item.sessionId) return `<button data-planning-retry="${esc(item.sessionId)}">${t("retry")}</button>`;
+  if (item.action === "resume_planning" && item.sessionId) return `<button data-planning-resume="${esc(item.sessionId)}">${t("resume")}</button>`;
+  if (item.action === "open_ticket" && item.ticketId) return `<button data-open-ticket="${esc(item.ticketId)}">${t("openTicket")}</button>`;
+  if (item.action === "open_settings" || item.action === "approve_preparation") return `<button data-go-tab="settings">${t("openSettings")}</button>`;
+  if (item.action === "confirm_integration" && item.ticketId) return `<button data-open-ticket="${esc(item.ticketId)}">${t("openTicket")}</button>`;
+  return "";
+}
+
+function renderProgress() {
+  const artifacts = state.planning?.artifacts ?? [];
+  const steps = [
+    { key: "ideaPlan", active: state.tab === "planning", done: artifacts.some((item) => item.kind === "tickets" && item.confirmedAt) },
+    { key: "tickets", active: ["tickets", "dag"].includes(state.tab), done: state.tickets.length > 0 },
+    { key: "execution", active: ["overview", "history", "sessions"].includes(state.tab), done: state.tickets.length > 0 && state.tickets.every((ticket) => ticket.status === "DONE") },
+    { key: "integration", active: false, done: state.tickets.length > 0 && state.tickets.every((ticket) => ticket.status === "DONE") },
+  ];
+  $("#progress").innerHTML = steps.map((step, index) => `<span class="progress-step ${step.done ? "done" : ""} ${step.active ? "active" : ""}"><i>${step.done ? "✓" : index + 1}</i>${t(step.key)}</span>`).join("");
+}
+
 async function renderHistory() {
   content.className = "stack";
   content.innerHTML = '<div class="empty">Loading history…</div>';
@@ -396,7 +444,40 @@ async function renderSettings() {
   content.innerHTML = '<div class="empty">Loading settings…</div>';
   const [settings, preparation] = await Promise.all([json(`${base()}/settings`), json(`${base()}/preparation`)]);
   const units = preparation.config.mode === "explicit" ? preparation.config.units || [] : [];
-  content.innerHTML = `<div class="grid"><article class="card"><h3>Effective</h3><pre>${esc(JSON.stringify(settings?.effective, null, 2))}</pre></article><article class="card"><h3>Capabilities</h3><pre>${esc(JSON.stringify(state.capabilities, null, 2))}</pre></article></div><article class="card"><h3>Project override</h3><textarea id="settings-override">${esc(JSON.stringify(settings?.override || {}, null, 2))}</textarea><button id="save-settings" class="primary">Validate and save</button></article><article class="card"><h3>Workspace preparation</h3><p>Auto-detection handles one unambiguous root stack. Mixed repositories use ordered units; shell steps must point to tracked Bash or PowerShell files.</p><label>Detection mode<select id="preparation-mode"><option value="auto" ${preparation.config.mode === "auto" ? "selected" : ""}>Auto-detect root stack</option><option value="explicit" ${preparation.config.mode === "explicit" ? "selected" : ""}>Explicit ordered units</option></select></label><div id="preparation-unit-editor" class="ticket-plan-rows ${preparation.config.mode === "explicit" ? "" : "hidden"}">${units.map(preparationUnitRow).join("")}</div><div class="actions"><button id="add-preparation-unit" class="${preparation.config.mode === "explicit" ? "" : "hidden"}">Add unit</button><button id="save-preparation" class="primary">Save preparation</button><button id="revoke-preparation" ${preparation.approval ? "" : "disabled"}>Revoke approval</button></div>${renderDetectedPreparation(preparation)}</article><article class="card"><h3>Future Auto mode</h3><p>Automatic sequential ticket execution is planned as an opt-in feature. Manual Run remains the default.</p></article><article class="card"><h3>Safe cleanup</h3><p>Preview registered worktrees, branches, metadata and global registration before deleting anything.</p><button id="plan-cleanup" class="danger-button">Build cleanup plan</button></article>`;
+  const effective = settings?.effective;
+  content.innerHTML = `<article class="card"><div class="row"><div><p class="kicker">Agent policy</p><h3>Project configuration</h3></div><small class="muted">Saved as a validated project override</small></div>
+    <div class="settings-grid"><label>Integration<select id="settings-integration"><option value="auto" ${effective?.integrationMode === "auto" ? "selected" : ""}>Automatic after review</option><option value="confirm" ${effective?.integrationMode === "confirm" ? "selected" : ""}>Always confirm</option></select></label>
+    <label>Review<select id="settings-review"><option value="independent" ${effective?.reviewMode === "independent" ? "selected" : ""}>Independent session</option><option value="self" ${effective?.reviewMode === "self" ? "selected" : ""}>Self review</option></select></label></div>
+    <div class="stage-table">${Object.entries(effective?.stages || {}).map(([stage, value]) => stageSettingsRow(stage, value)).join("")}</div>
+    <button id="save-settings" class="primary">Validate and save</button>
+    <details><summary>Raw effective configuration</summary><pre>${esc(JSON.stringify(effective, null, 2))}</pre></details>
+  </article><article class="card"><h3>Workspace preparation</h3><p>Auto-detection handles one unambiguous root stack. Mixed repositories use ordered units; shell steps must point to tracked Bash or PowerShell files.</p><label>Detection mode<select id="preparation-mode"><option value="auto" ${preparation.config.mode === "auto" ? "selected" : ""}>Auto-detect root stack</option><option value="explicit" ${preparation.config.mode === "explicit" ? "selected" : ""}>Explicit ordered units</option></select></label><div id="preparation-unit-editor" class="ticket-plan-rows ${preparation.config.mode === "explicit" ? "" : "hidden"}">${units.map(preparationUnitRow).join("")}</div><div class="actions"><button id="add-preparation-unit" class="${preparation.config.mode === "explicit" ? "" : "hidden"}">Add unit</button><button id="save-preparation" class="primary">Save preparation</button><button id="revoke-preparation" ${preparation.approval ? "" : "disabled"}>Revoke approval</button></div>${renderDetectedPreparation(preparation)}</article><article class="card"><h3>Future Auto mode</h3><p>Automatic sequential ticket execution is planned as an opt-in feature. Manual Run remains the default.</p></article><article class="card"><h3>Safe cleanup</h3><p>Preview registered worktrees, branches, metadata and global registration before deleting anything.</p><button id="plan-cleanup" class="danger-button">Build cleanup plan</button></article>`;
+}
+
+function stageSettingsRow(stage, selected) {
+  const models = state.capabilities?.models ?? [];
+  const model = models.find((item) => item.id === selected.model) ?? models[0];
+  const efforts = model?.efforts ?? [];
+  return `<fieldset data-settings-stage="${esc(stage)}"><legend>${esc(stage)}</legend>
+    <label>Provider<input data-stage-provider value="${esc(state.capabilities?.provider || selected.provider)}" readonly></label>
+    <label>Model<select data-stage-model>${models.map((item) => `<option value="${esc(item.id)}" ${item.id === selected.model ? "selected" : ""}>${esc(item.id)}</option>`).join("")}</select></label>
+    <label>Effort<select data-stage-effort><option value="">Not applicable</option>${efforts.map((effort) => `<option value="${esc(effort)}" ${effort === selected.effort ? "selected" : ""}>${esc(effort)}</option>`).join("")}</select></label>
+  </fieldset>`;
+}
+
+function readSettingsOverride() {
+  return {
+    integrationMode: $("#settings-integration").value,
+    reviewMode: $("#settings-review").value,
+    stages: Object.fromEntries([...document.querySelectorAll("[data-settings-stage]")].map((row) => [
+      row.dataset.settingsStage,
+      {
+        provider: row.querySelector("[data-stage-provider]").value,
+        model: row.querySelector("[data-stage-model]").value,
+        effort: row.querySelector("[data-stage-effort]").value || null,
+      },
+    ])),
+  };
 }
 
 function showPreparationApproval(error, request) {
@@ -432,13 +513,34 @@ async function refreshPreview() {
 }
 
 async function action(operation, refresh = true) {
-  errorBox.textContent = "";
+  clearNotice();
   try {
     await operation();
     if (refresh && state.project) await refreshProject();
   } catch (error) {
-    errorBox.textContent = error.message;
+    showNotice(error);
   }
+}
+
+function clearNotice() {
+  state.notice = null;
+  errorBox.classList.remove("visible");
+  errorBox.innerHTML = "";
+}
+
+function showNotice(error) {
+  const code = error.code || "internal.error";
+  const diagnostic = diagnosticFor(code);
+  state.notice = { code, message: error.message };
+  errorBox.classList.add("visible");
+  errorBox.innerHTML = `<div><strong>${esc(diagnostic.title)}</strong><p>${esc(diagnostic.body)}</p><details><summary>${t("technicalDetails")}</summary><pre>${esc(`${code}\n${error.message}`)}</pre></details></div><button id="dismiss-error" aria-label="${t("dismiss")}">×</button>`;
+}
+
+function selectTab(tab) {
+  state.tab = tab;
+  document.querySelectorAll("[data-tab]").forEach((item) => item.classList.toggle("active", item.dataset.tab === tab));
+  render();
+  if (tab === "activity") void refreshProject().catch(showNotice);
 }
 
 function openWizard(mode, path = "") {
@@ -523,10 +625,18 @@ $("#projects").addEventListener("click", (event) => {
 $("#content").addEventListener("click", (event) => {
   const target = event.target.closest("button");
   if (!target) return;
+  if (target.dataset.goTab) { selectTab(target.dataset.goTab); return; }
   if (target.dataset.project) { void action(() => selectProject(target.dataset.project), false); return; }
   if (target.dataset.onboard) { openWizard(target.dataset.onboard); return; }
   if (target.id === "refresh-preflight") { void action(async () => { state.preflight = await json("/api/preflight/refresh", mutation({})); renderHealth(); showLanding(); }, false); return; }
   if (!state.project) return;
+  if (target.dataset.planningRetry) { void action(() => json(`${base()}/planning/sessions/${encodeURIComponent(target.dataset.planningRetry)}/actions`, mutation({ action: "retry" }))); return; }
+  if (target.dataset.copySession) {
+    const session = state.planning?.sessions.find((candidate) => candidate.id === target.dataset.copySession);
+    if (session) void navigator.clipboard.writeText(`${session.errorCode || "planning.error"}\n${session.errorDetail || "No detail"}`).then(() => { target.textContent = t("copied"); });
+    return;
+  }
+  if (target.dataset.openTicket) { selectTab("tickets"); return; }
   if (target.dataset.ticketAction) {
     void action(async () => {
       const body = { action: target.dataset.ticketAction };
@@ -583,7 +693,7 @@ $("#content").addEventListener("click", (event) => {
     return;
   }
   if (target.dataset.confirmPlan) { void action(() => json(`${base()}/planning/dag/confirm`, mutation({ artifactId: target.dataset.confirmPlan }))); return; }
-  if (target.id === "save-settings") { void action(() => json(`${base()}/settings`, mutation({ override: JSON.parse($("#settings-override").value) }))); return; }
+  if (target.id === "save-settings") { void action(() => json(`${base()}/settings`, mutation({ override: readSettingsOverride() }))); return; }
   if (target.id === "add-preparation-unit") { $("#preparation-unit-editor").insertAdjacentHTML("beforeend", preparationUnitRow()); return; }
   if (target.dataset.removePreparation !== undefined) { target.closest("[data-preparation-unit]")?.remove(); return; }
   if (target.dataset.preparationUp !== undefined) { const row = target.closest("[data-preparation-unit]"); if (row?.previousElementSibling) row.parentElement.insertBefore(row, row.previousElementSibling); return; }
@@ -604,10 +714,11 @@ $("#content").addEventListener("change", (event) => {
 $("#nav").addEventListener("click", (event) => {
   const button = event.target.closest("[data-tab]");
   if (!button) return;
-  state.tab = button.dataset.tab;
-  document.querySelectorAll("[data-tab]").forEach((item) => item.classList.toggle("active", item === button));
-  render();
+  selectTab(button.dataset.tab);
 });
+$("#error").addEventListener("click", (event) => { if (event.target.closest("#dismiss-error")) clearNotice(); });
+$("#locale-select").addEventListener("change", () => void savePreferences());
+$("#theme-select").addEventListener("change", () => void savePreferences());
 $("#home").addEventListener("click", showLanding);
 $("#add-project").addEventListener("click", () => openWizard("existing"));
 $("#inspect-project").addEventListener("click", () => void action(inspectWizard, false));
@@ -643,20 +754,38 @@ async function boot() {
     if (hashProject) await selectProject(hashProject);
     else if (prefilledPath) openWizard("existing", prefilledPath);
   } catch (error) {
-    errorBox.textContent = error.message;
+    showNotice(error);
+  }
+}
+
+async function savePreferences() {
+  const preferences = { locale: $("#locale-select").value, theme: $("#theme-select").value };
+  try {
+    const result = await json("/api/preferences", mutationMethod("PUT", preferences));
+    state.preferences = result.preferences;
+    configurePreferences(state.preferences);
+    renderChrome();
+    renderProjects();
+    if (state.project) render(); else showLanding();
+  } catch (error) {
+    showNotice(error);
   }
 }
 
 void boot();
 setInterval(() => {
-  if (state.project && ["overview", "tickets", "dag"].includes(state.tab)) void refreshProject().catch((error) => { errorBox.textContent = error.message; });
+  if (state.project && ["overview", "tickets", "dag", "activity"].includes(state.tab)) void refreshProject().catch(showNotice);
 }, 2500);
 
 setInterval(() => {
   if (!state.project || state.tab !== "planning") return;
-  void json(`${base()}/planning`).then((planning) => {
+  void Promise.all([json(`${base()}/planning`), json(`${base()}/activity`)]).then(([planning, activity]) => {
     state.planning = planning;
+    state.activity = activity;
+    const entry = state.projects.find((candidate) => candidate.project.id === state.project.id);
+    if (entry) entry.attention = activity.summary;
+    renderProjects();
     const editing = content.contains(document.activeElement) && ["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName);
     if (!editing) renderPlanning();
-  }).catch((error) => { errorBox.textContent = error.message; });
+  }).catch(showNotice);
 }, 1000);

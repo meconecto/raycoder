@@ -1,6 +1,7 @@
 import type { RegisteredProject, ProjectRegistry } from "./project-registry.js";
 import { ProjectInspector, type ProjectInspection } from "./project-inspector.js";
 import { ProjectRuntime, type ProjectRuntimeOptions } from "./project-runtime.js";
+import { ProjectActivityService, type ProjectActivityPage, type ProjectAttentionSummary } from "./project-activity.js";
 
 export class ProjectManager {
   readonly #registry: ProjectRegistry;
@@ -20,15 +21,26 @@ export class ProjectManager {
     this.#inspector = inspector;
   }
 
-  public list(): { project: RegisteredProject; open: boolean; state: "closed" | "opening" | "open" | "error"; error: string | null }[] {
-    return this.#registry.list().map((project) => ({
+  public list(): { project: RegisteredProject; open: boolean; state: "closed" | "opening" | "open" | "error"; error: string | null; attention: ProjectAttentionSummary }[] {
+    return this.#registry.list().map((project) => {
+      const runtime = this.#runtimes.get(project.id);
+      if (runtime !== undefined) this.#registry.setAttention(project.id, new ProjectActivityService(runtime.repository).summary());
+      return {
       project,
-      open: this.#runtimes.has(project.id),
-      state: this.#runtimes.has(project.id)
+      open: runtime !== undefined,
+      state: runtime !== undefined
         ? "open"
         : this.#opening.has(project.id) ? "opening" : this.#errors.has(project.id) ? "error" : "closed",
       error: this.#errors.get(project.id) ?? null,
-    }));
+      attention: this.#registry.attention(project.id),
+    };
+    });
+  }
+
+  public activity(projectId: string, input: { before?: string; limit?: number; severity?: "info" | "warning" | "error" } = {}): ProjectActivityPage {
+    const page = new ProjectActivityService(this.get(projectId).repository).list(input);
+    this.#registry.setAttention(projectId, page.summary);
+    return page;
   }
 
   public async inspect(path: string): Promise<ProjectInspection> {

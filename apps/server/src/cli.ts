@@ -107,6 +107,7 @@ async function main(): Promise<void> {
     host = new RaycoderApplicationHost({
       projects,
       memory,
+      config: configStore,
       preflight,
       runPreflight: async () => await preflightService.run(),
     });

@@ -29,11 +29,11 @@ describe("GlobalConfigStore", () => {
 
     await store.setIntegrationMode("confirm");
 
-    expect(await store.read()).toMatchObject({ version: 2, integrationMode: "confirm" });
-    expect(JSON.parse(readFileSync(path, "utf8"))).toMatchObject({ version: 2, integrationMode: "confirm" });
+    expect(await store.read()).toMatchObject({ version: 3, integrationMode: "confirm" });
+    expect(JSON.parse(readFileSync(path, "utf8"))).toMatchObject({ version: 3, integrationMode: "confirm" });
   });
 
-  it("reads a version 1 config with version 2 defaults without rewriting it", async () => {
+  it("reads legacy configs with version 3 defaults without rewriting them", async () => {
     const directory = mkdtempSync(join(tmpdir(), "raycoder-config-v1-"));
     temporaryDirectories.push(directory);
     const path = join(directory, "config.json");
@@ -42,7 +42,20 @@ describe("GlobalConfigStore", () => {
 
     const config = await new GlobalConfigStore(path).read();
 
-    expect(config).toMatchObject({ version: 2, integrationMode: "confirm", reviewMode: "independent" });
+    expect(config).toMatchObject({ version: 3, integrationMode: "confirm", reviewMode: "independent", ui: { locale: "auto", theme: "system" } });
     expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ version: 1, integrationMode: "confirm" });
+
+    await writeFile(path, JSON.stringify({ ...defaultGlobalConfig, version: 2, ui: undefined }));
+    expect(await new GlobalConfigStore(path).read()).toMatchObject({ version: 3, ui: { locale: "auto", theme: "system" } });
+    expect(JSON.parse(readFileSync(path, "utf8"))).toMatchObject({ version: 2 });
+  });
+
+  it("persists validated UI preferences", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "raycoder-config-ui-"));
+    temporaryDirectories.push(directory);
+    const path = join(directory, "config.json");
+    const store = new GlobalConfigStore(path);
+    expect((await store.setUiPreferences({ locale: "es", theme: "light" })).ui).toEqual({ locale: "es", theme: "light" });
+    expect(await store.read()).toMatchObject({ version: 3, ui: { locale: "es", theme: "light" } });
   });
 });

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type {
   MemoryService,
+  GlobalConfigStore,
   PlannedTicket,
   PreflightReport,
   ProjectConfigOverride,
@@ -51,6 +52,7 @@ export interface RaycoderServerOptions {
   readonly directoryPicker?: DirectoryPicker;
   readonly uiRoot?: string;
   readonly instance?: InstanceIdentity;
+  readonly configStore?: GlobalConfigStore;
   readonly onShutdown?: () => void;
 }
 
@@ -82,7 +84,9 @@ async function route(
     sendError(response, 403, "request.invalid_origin", new Error("Cross-origin mutations are not accepted"));
     return;
   }
-  if (request.method === "GET" && ["/", "/app.js", "/styles.css"].includes(url.pathname)) {
+  if (request.method === "GET" && [
+    "/", "/app.js", "/styles.css", "/api.js", "/i18n.js", "/presentation.js", "/state.js",
+  ].includes(url.pathname)) {
     await sendUiAsset(response, url.pathname, options.uiRoot);
     return;
   }
@@ -115,6 +119,31 @@ async function route(
   }
   if (request.method === "POST" && url.pathname === "/api/preflight/refresh") {
     sendJson(response, 200, options.app === undefined ? currentPreflight(options) : await options.app.refreshPreflight());
+    return;
+  }
+  const configStore = options.app?.config ?? options.configStore;
+  if (request.method === "GET" && url.pathname === "/api/preferences") {
+    if (configStore === undefined) {
+      sendError(response, 409, "preferences.unavailable", new Error("UI preferences are unavailable"));
+      return;
+    }
+    sendJson(response, 200, { preferences: (await configStore.read()).ui });
+    return;
+  }
+  if (request.method === "PUT" && url.pathname === "/api/preferences") {
+    if (configStore === undefined) {
+      sendError(response, 409, "preferences.unavailable", new Error("UI preferences are unavailable"));
+      return;
+    }
+    const body = await readJson(request);
+    if (
+      (body.locale !== "auto" && body.locale !== "es" && body.locale !== "en")
+      || (body.theme !== "system" && body.theme !== "light" && body.theme !== "dark")
+    ) {
+      sendError(response, 400, "preferences.invalid", new Error("locale and theme are invalid"));
+      return;
+    }
+    sendJson(response, 200, { preferences: (await configStore.setUiPreferences({ locale: body.locale, theme: body.theme })).ui });
     return;
   }
   if (request.method === "POST" && url.pathname === "/api/system/directory-picker") {
@@ -372,6 +401,24 @@ async function routeProjects(
     });
     return true;
   }
+  if (request.method === "GET" && tail === "activity") {
+    const severity = url.searchParams.get("severity");
+    if (severity !== null && severity !== "info" && severity !== "warning" && severity !== "error") {
+      sendError(response, 400, "activity.severity_invalid", new Error("severity must be info, warning or error"));
+      return true;
+    }
+    const requestedLimit = Number(url.searchParams.get("limit") ?? "50");
+    if (!Number.isInteger(requestedLimit) || requestedLimit < 1) {
+      sendError(response, 400, "activity.limit_invalid", new Error("limit must be a positive integer"));
+      return true;
+    }
+    sendJson(response, 200, projects.activity(projectId, {
+      limit: requestedLimit,
+      ...(url.searchParams.get("before") === null ? {} : { before: url.searchParams.get("before") as string }),
+      ...(severity === null ? {} : { severity }),
+    }));
+    return true;
+  }
   if (request.method === "POST" && tail === "planning/thread") {
     const capabilities = await runtime.capabilities();
     sendJson(response, 200, { thread: runtime.planning.ensureThread(capabilities.provider) });
@@ -444,7 +491,14 @@ async function routeProjects(
       sendJson(response, 202, { session });
       return true;
     }
-    sendError(response, 400, "planning.action_invalid", new Error("action must be cancel or resume"));
+    if (body.action === "retry") {
+      if (!providerAvailable(preflight, response)) return true;
+      const session = await runtime.planning.prepareRetry(sessionId);
+      schedulePlanning(runtime, session.id);
+      sendJson(response, 202, { session });
+      return true;
+    }
+    sendError(response, 400, "planning.action_invalid", new Error("action must be cancel, resume or retry"));
     return true;
   }
   if (request.method === "POST" && tail === "planning/specs") {
@@ -839,9 +893,9 @@ function validOrigin(origin: string | undefined, host: string | undefined): bool
 
 async function sendUiAsset(response: ServerResponse, pathname: string, uiRoot?: string): Promise<void> {
   const root = uiRoot ?? fileURLToPath(new URL("./assets/ui", import.meta.url));
-  const [file, contentType] = pathname === "/"
-    ? ["index.html", "text/html; charset=utf-8"]
-    : pathname === "/app.js" ? ["app.js", "text/javascript; charset=utf-8"] : ["styles.css", "text/css; charset=utf-8"];
+  const file = pathname === "/" ? "index.html" : pathname.slice(1);
+  const contentType = pathname === "/" ? "text/html; charset=utf-8"
+    : pathname.endsWith(".js") ? "text/javascript; charset=utf-8" : "text/css; charset=utf-8";
   const contents = await readFile(join(root, file));
   response.writeHead(200, { "content-type": contentType, "cache-control": "no-store", "x-content-type-options": "nosniff" });
   response.end(contents);

@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="system">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="dark">
+  <meta name="color-scheme" content="light dark">
   <title>raycoder</title>
   <link rel="stylesheet" href="/styles.css">
 </head>
@@ -11,27 +11,35 @@
   <div class="shell">
     <aside class="sidebar">
       <button class="brand" id="home" aria-label="Project selector">ray<span>coder</span></button>
-      <div class="eyebrow">Projects</div>
+      <div class="eyebrow" id="projects-label">Projects</div>
       <div id="projects" class="project-list"></div>
       <button id="add-project" class="wide">+ Add project</button>
-      <div class="eyebrow">Runtime</div>
+      <div class="eyebrow" id="runtime-label">Runtime</div>
       <div id="sidebar-health" class="muted">Checking…</div>
+      <div class="sidebar-preferences">
+        <label><span id="language-label">Language</span><select id="locale-select" aria-label="Language"><option value="auto">Automatic</option><option value="es">Español</option><option value="en">English</option></select></label>
+        <label><span id="theme-label">Theme</span><select id="theme-select" aria-label="Theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
+      </div>
     </aside>
     <main class="workspace">
       <header class="topbar">
         <div><p class="kicker" id="view-kicker">Local workspace</p><h1 id="project-name">Choose where to work</h1><p id="project-path"></p></div>
         <div id="health" class="health"></div>
       </header>
+      <div id="progress" class="progress-rail" aria-label="Project progress"></div>
       <nav class="nav hidden" id="nav" aria-label="Project views">
         <button data-tab="overview" class="active">Overview</button>
-        <button data-tab="planning">Planning</button>
+        <button data-tab="planning" aria-label="Planning">Planning</button>
         <button data-tab="tickets">Tickets</button>
-        <button data-tab="dag">DAG</button>
-        <button data-tab="history">History</button>
-        <button data-tab="sessions">Sessions</button>
-        <button data-tab="settings">Settings</button>
+        <button data-tab="activity">Activity</button>
+        <div class="advanced-nav"><span id="advanced-label">Advanced</span><div>
+          <button data-tab="dag">DAG</button>
+          <button data-tab="history">History</button>
+          <button data-tab="sessions">Sessions</button>
+          <button data-tab="settings">Settings</button>
+        </div></div>
       </nav>
-      <div id="error" class="error" role="alert"></div>
+      <div id="error" class="notice" role="alert" aria-live="assertive"></div>
       <div id="content"></div>
     </main>
   </div>

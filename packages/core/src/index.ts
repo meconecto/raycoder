@@ -18,6 +18,7 @@ export * from "./project-verifier.js";
 export * from "./project-orchestrator.js";
 export * from "./project-manager.js";
 export * from "./project-cleanup.js";
+export * from "./project-activity.js";
 export * from "./project-inspector.js";
 export * from "./project-registry.js";
 export * from "./project-runtime.js";

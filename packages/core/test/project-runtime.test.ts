@@ -47,7 +47,17 @@ describe("ProjectRegistry and ProjectRuntime", () => {
     expect((await runner.run("git", ["log", "-1", "--format=%an <%ae>|%s"], { cwd: fresh })).stdout.trim())
       .toBe("raycoder <raycoder@local.invalid>|chore: initialize raycoder project");
     await expect(runner.run("git", ["config", "--local", "--get", "user.name"], { cwd: fresh })).rejects.toThrow();
+    registry.setAttention(first.id, {
+      count: 1,
+      highestSeverity: "error",
+      latestCode: "quota_exhausted",
+      latestAt: "2026-09-05T03:06:20.360Z",
+    });
+    expect(registry.attention(first.id)).toMatchObject({ count: 1, latestCode: "quota_exhausted" });
     registry.close();
+    const reopened = new ProjectRegistry(join(root, "projects.db"));
+    expect(reopened.attention(first.id)).toMatchObject({ count: 1, highestSeverity: "error" });
+    reopened.close();
   });
 
   it("inspects paths before mutation and initializes an existing folder without staging its files", async () => {
