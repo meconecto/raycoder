@@ -82,7 +82,7 @@ test("first run, onboarding, dirty confirmation and cleanup", async ({ page }) =
     writeFileSync(join(project, "package.json"), JSON.stringify({ private: true, packageManager: "pnpm@1.0.0" }), "utf8");
     writeFileSync(join(project, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n", "utf8");
     execFileSync("git", ["add", "package.json", "pnpm-lock.yaml"], { cwd: project });
-    execFileSync("git", ["commit", "-m", "test: add node stack"], { cwd: project });
+    commitFixture(project, "test: add node stack");
     await expect(page.getByText(/main · [a-f0-9]{10} · clean/u)).toBeVisible({ timeout: 8_000 });
     writeFileSync(join(project, "local-only.txt"), "outside ticket workspace\n", "utf8");
     await expect(page.getByText(/main · [a-f0-9]{10} · dirty/u)).toBeVisible({ timeout: 8_000 });
@@ -119,7 +119,7 @@ test("first run, onboarding, dirty confirmation and cleanup", async ({ page }) =
 
     writeFileSync(join(project, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\nrevision: 2\n", "utf8");
     execFileSync("git", ["add", "pnpm-lock.yaml"], { cwd: project });
-    execFileSync("git", ["commit", "-m", "test: change lock"], { cwd: project });
+    commitFixture(project, "test: change lock");
     await page.locator("#ticket-title").fill("Changed lock");
     await page.locator("#ticket-description").fill("Require a new fingerprint approval");
     await page.getByRole("button", { name: "Create", exact: true }).click();
@@ -132,7 +132,7 @@ test("first run, onboarding, dirty confirmation and cleanup", async ({ page }) =
 
     writeFileSync(join(project, "go.mod"), "module example.test/e2e\n\ngo 1.24\n", "utf8");
     execFileSync("git", ["add", "go.mod"], { cwd: project });
-    execFileSync("git", ["commit", "-m", "test: add second stack"], { cwd: project });
+    commitFixture(project, "test: add second stack");
     await page.getByRole("button", { name: "Settings", exact: true }).click();
     await page.locator("#preparation-mode").selectOption("explicit");
     await page.getByRole("button", { name: "Add unit" }).click();
@@ -151,7 +151,7 @@ test("first run, onboarding, dirty confirmation and cleanup", async ({ page }) =
 
     writeFileSync(join(project, "package.json"), JSON.stringify({ private: true, packageManager: "pnpm@1.0.0", raycoderPreparationFailOnce: true }), "utf8");
     execFileSync("git", ["add", "package.json"], { cwd: project });
-    execFileSync("git", ["commit", "-m", "test: request one failed preparation"], { cwd: project });
+    commitFixture(project, "test: request one failed preparation");
     await page.locator("#ticket-title").fill("Preparation retry");
     await page.locator("#ticket-description").fill("Preserve and retry a failed setup");
     await page.getByRole("button", { name: "Create", exact: true }).click();
@@ -194,3 +194,11 @@ test("first run, onboarding, dirty confirmation and cleanup", async ({ page }) =
     }
   }
 });
+
+function commitFixture(project, message) {
+  execFileSync("git", [
+    "-c", "user.name=raycoder e2e",
+    "-c", "user.email=e2e@raycoder.local",
+    "commit", "-m", message,
+  ], { cwd: project });
+}

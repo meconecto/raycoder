@@ -89,7 +89,11 @@ describe("ProjectCleanupService", () => {
     writeFileSync(join(fixture.root, "package.json"), JSON.stringify({ private: true, packageManager: "pnpm@11.19.0" }), "utf8");
     writeFileSync(join(fixture.root, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n", "utf8");
     await runner.run("git", ["add", "package.json", "pnpm-lock.yaml"], { cwd: fixture.root });
-    await runner.run("git", ["commit", "-m", "test: add node stack"], { cwd: fixture.root });
+    await runner.run("git", [
+      "-c", "user.name=raycoder tests",
+      "-c", "user.email=tests@raycoder.local",
+      "commit", "-m", "test: add node stack",
+    ], { cwd: fixture.root });
     const runtime = fixture.manager.get(fixture.projectId);
     runtime.tickets.create({ id: "approval", title: "Approval", description: "preserve preparation" });
     await runtime.preparation.prepareTicket({ ticketId: "approval", projectRoot: fixture.root, dirtyPolicy: "cancel" }).catch(() => undefined);
