@@ -79,6 +79,11 @@ test("first run, onboarding, dirty confirmation and cleanup", async ({ page }) =
     await expect(page.locator(".message.user")).toContainText("Plan a conversational release slice");
 
     await page.getByRole("button", { name: "Overview", exact: true }).click();
+    writeFileSync(join(project, "package.json"), JSON.stringify({ private: true, packageManager: "pnpm@1.0.0" }), "utf8");
+    writeFileSync(join(project, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n", "utf8");
+    execFileSync("git", ["add", "package.json", "pnpm-lock.yaml"], { cwd: project });
+    execFileSync("git", ["commit", "-m", "test: add node stack"], { cwd: project });
+    await expect(page.getByText(/main · [a-f0-9]{10} · clean/u)).toBeVisible({ timeout: 8_000 });
     writeFileSync(join(project, "local-only.txt"), "outside ticket workspace\n", "utf8");
     await expect(page.getByText(/main · [a-f0-9]{10} · dirty/u)).toBeVisible({ timeout: 8_000 });
     await page.getByRole("button", { name: "Tickets", exact: true }).click();
@@ -91,6 +96,10 @@ test("first run, onboarding, dirty confirmation and cleanup", async ({ page }) =
     });
     const browserTicket = page.locator(".card").filter({ hasText: "Browser ticket" });
     await browserTicket.getByRole("button", { name: "Run", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Allow reproducible setup?" })).toBeVisible();
+    await expect(page.locator("#preparation-commands")).toContainText("pnpm install --frozen-lockfile");
+    const firstFingerprint = await page.locator("#preparation-fingerprint").textContent();
+    await page.getByRole("button", { name: "Approve for this project" }).click();
     await expect(browserTicket.getByText("BLOCKED", { exact: true })).toBeVisible();
     await expect(browserTicket.getByText(/base_checkout_dirty/u)).toBeVisible();
     rmSync(join(project, "local-only.txt"), { force: true });
@@ -99,6 +108,68 @@ test("first run, onboarding, dirty confirmation and cleanup", async ({ page }) =
     await page.getByRole("button", { name: "Tickets", exact: true }).click();
     await browserTicket.getByRole("button", { name: "Retry", exact: true }).click();
     await expect(browserTicket.getByText("DONE", { exact: true })).toBeVisible();
+
+    await page.locator("#ticket-title").fill("Approval reuse");
+    await page.locator("#ticket-description").fill("Reuse the unchanged preparation fingerprint");
+    await page.getByRole("button", { name: "Create", exact: true }).click();
+    const reused = page.locator(".card").filter({ hasText: "Approval reuse" });
+    await reused.getByRole("button", { name: "Run", exact: true }).click();
+    await expect(reused.getByText("DONE", { exact: true })).toBeVisible();
+    await expect(page.locator("#preparation-dialog")).not.toBeVisible();
+
+    writeFileSync(join(project, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\nrevision: 2\n", "utf8");
+    execFileSync("git", ["add", "pnpm-lock.yaml"], { cwd: project });
+    execFileSync("git", ["commit", "-m", "test: change lock"], { cwd: project });
+    await page.locator("#ticket-title").fill("Changed lock");
+    await page.locator("#ticket-description").fill("Require a new fingerprint approval");
+    await page.getByRole("button", { name: "Create", exact: true }).click();
+    const changedLock = page.locator(".card").filter({ hasText: "Changed lock" });
+    await changedLock.getByRole("button", { name: "Run", exact: true }).click();
+    await expect(page.locator("#preparation-dialog")).toBeVisible();
+    expect(await page.locator("#preparation-fingerprint").textContent()).not.toBe(firstFingerprint);
+    await page.getByRole("button", { name: "Approve for this project" }).click();
+    await expect(changedLock.getByText("DONE", { exact: true })).toBeVisible();
+
+    writeFileSync(join(project, "go.mod"), "module example.test/e2e\n\ngo 1.24\n", "utf8");
+    execFileSync("git", ["add", "go.mod"], { cwd: project });
+    execFileSync("git", ["commit", "-m", "test: add second stack"], { cwd: project });
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await page.locator("#preparation-mode").selectOption("explicit");
+    await page.getByRole("button", { name: "Add unit" }).click();
+    await page.locator("[data-preparation-strategy]").nth(1).selectOption("go");
+    await page.getByRole("button", { name: "Save preparation" }).click();
+    await expect(page.locator("[data-preparation-unit]")).toHaveCount(2);
+    await page.getByRole("button", { name: "Tickets", exact: true }).click();
+    await page.locator("#ticket-title").fill("Multistack ticket");
+    await page.locator("#ticket-description").fill("Prepare Node and Go in order");
+    await page.getByRole("button", { name: "Create", exact: true }).click();
+    const multistack = page.locator(".card").filter({ hasText: "Multistack ticket" });
+    await multistack.getByRole("button", { name: "Run", exact: true }).click();
+    await expect(page.locator("#preparation-commands")).toContainText("go mod verify");
+    await page.getByRole("button", { name: "Approve for this project" }).click();
+    await expect(multistack.getByText("DONE", { exact: true })).toBeVisible();
+
+    writeFileSync(join(project, "package.json"), JSON.stringify({ private: true, packageManager: "pnpm@1.0.0", raycoderPreparationFailOnce: true }), "utf8");
+    execFileSync("git", ["add", "package.json"], { cwd: project });
+    execFileSync("git", ["commit", "-m", "test: request one failed preparation"], { cwd: project });
+    await page.locator("#ticket-title").fill("Preparation retry");
+    await page.locator("#ticket-description").fill("Preserve and retry a failed setup");
+    await page.getByRole("button", { name: "Create", exact: true }).click();
+    const failedPreparation = page.locator(".card").filter({ hasText: "Preparation retry" });
+    await failedPreparation.getByRole("button", { name: "Run", exact: true }).click();
+    await page.getByRole("button", { name: "Approve for this project" }).click();
+    await expect(failedPreparation.getByText("BLOCKED", { exact: true })).toBeVisible();
+    await expect(failedPreparation).toContainText("preparation.failed");
+    await failedPreparation.getByRole("button", { name: "Retry", exact: true }).click();
+    await expect(failedPreparation.getByText("DONE", { exact: true })).toBeVisible();
+
+    await page.reload();
+    await page.locator("#projects [data-project]").click();
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await expect(page.locator("#preparation-mode")).toHaveValue("explicit");
+    await expect(page.locator("[data-preparation-unit]")).toHaveCount(2);
+    await page.getByRole("button", { name: "Tickets", exact: true }).click();
+    await expect(page.locator(".card").filter({ hasText: "Preparation retry" }).getByText("DONE", { exact: true })).toBeVisible();
 
     writeFileSync(join(project, "local-preserved.txt"), "cleanup must preserve the checkout\n", "utf8");
 

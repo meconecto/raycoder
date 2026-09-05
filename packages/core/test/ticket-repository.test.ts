@@ -38,12 +38,13 @@ describe("TicketRepository", () => {
       { version: 3, name: "operational_observations_and_reviews" },
       { version: 4, name: "planning_artifacts_threads_and_settings" },
       { version: 5, name: "conversational_planning_sessions_and_traceability" },
+      { version: 6, name: "durable_workspace_preparation" },
     ]);
     first.close();
 
     const second = new TicketRepository(path);
     expect(second.get("one").status).toBe("READY");
-    expect(second.appliedMigrations()).toHaveLength(5);
+    expect(second.appliedMigrations()).toHaveLength(6);
     second.close();
   });
 
@@ -65,7 +66,7 @@ describe("TicketRepository", () => {
     const repository = new TicketRepository(path);
     repository.create(fixture("upgraded"));
 
-    expect(repository.appliedMigrations().map((migration) => migration.version)).toEqual([1, 2, 3, 4, 5]);
+    expect(repository.appliedMigrations().map((migration) => migration.version)).toEqual([1, 2, 3, 4, 5, 6]);
     expect(repository.get("upgraded").status).toBe("READY");
     repository.close();
   });
@@ -97,7 +98,7 @@ describe("TicketRepository", () => {
     database.close();
 
     const first = new TicketRepository(path);
-    expect(first.appliedMigrations().map((migration) => migration.version)).toEqual([1, 2, 3, 4, 5]);
+    expect(first.appliedMigrations().map((migration) => migration.version)).toEqual([1, 2, 3, 4, 5, 6]);
     expect(first.latestPlanningThread()).toMatchObject({ id: "thread-v4", status: "idle" });
     expect(first.planningMessages("thread-v4")).toMatchObject([{ content: "preserved message", sessionId: null }]);
     expect(first.getPlanningArtifact("artifact-v4")).toMatchObject({
@@ -108,8 +109,41 @@ describe("TicketRepository", () => {
     first.close();
 
     const second = new TicketRepository(path);
-    expect(second.appliedMigrations()).toHaveLength(5);
+    expect(second.appliedMigrations()).toHaveLength(6);
     expect(second.listPlanningSessions()).toEqual([]);
+    second.close();
+  });
+
+  it("upgrades a real v5 database to v6 idempotently without losing tickets", () => {
+    const directory = mkdtempSync(join(tmpdir(), "raycoder-db-v5-"));
+    temporaryDirectories.push(directory);
+    const path = join(directory, "raycoder.db");
+    const database = new SqliteDatabase(path);
+    database.exec(`CREATE TABLE schema_migrations (
+      version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL
+    );`);
+    for (const migration of migrations.slice(0, 5)) {
+      database.exec(migration.sql);
+      database.prepare("INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)")
+        .run(migration.version, migration.name, "2026-09-02T00:00:00.000Z");
+    }
+    database.prepare(`INSERT INTO tickets (
+      id, title, description, status, blocked_from, branch, base_branch, base_commit, workspace, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      "v5-ticket", "V5", "preserved", "READY", null, null, "main", null, null,
+      "2026-09-02T00:00:00.000Z", "2026-09-02T00:00:00.000Z",
+    );
+    database.close();
+
+    const first = new TicketRepository(path);
+    expect(first.get("v5-ticket")).toMatchObject({ title: "V5", status: "READY" });
+    expect(first.appliedMigrations().map((migration) => migration.version)).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(first.listWorkspacePreparationAttempts()).toEqual([]);
+    first.close();
+
+    const second = new TicketRepository(path);
+    expect(second.appliedMigrations()).toHaveLength(6);
+    expect(second.get("v5-ticket").description).toBe("preserved");
     second.close();
   });
 

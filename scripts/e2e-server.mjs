@@ -1,7 +1,7 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { FakeAgentAdapter, GlobalConfigStore, MemoryService, ProjectManager, ProjectRegistry } from "../apps/server/dist/runtime.js";
+import { FakeAgentAdapter, GlobalConfigStore, MemoryService, NodeProcessRunner, ProjectManager, ProjectRegistry } from "../apps/server/dist/runtime.js";
 import { createRaycoderServer } from "../apps/server/dist/server.js";
 
 const fixtureRoot = mkdtempSync(join(tmpdir(), "raycoder-e2e-host-"));
@@ -15,9 +15,25 @@ await globalConfig.write({
     { provider: "fake", model: "deterministic", effort: null },
   ])),
 });
+const nativeRunner = new NodeProcessRunner();
+const failedPreparationRoots = new Set();
+const preparationRunner = {
+  async run(command, args, options) {
+    if (command === "git") return await nativeRunner.run(command, args, options);
+    if (args.includes("--version") || (command === "go" && args[0] === "version")) {
+      return { command, args, cwd: options.cwd, exitCode: 0, stdout: `${command} 1.0.0\n`, stderr: "" };
+    }
+    if (command === "pnpm" && JSON.parse(readFileSync(join(options.cwd, "package.json"), "utf8")).raycoderPreparationFailOnce === true
+      && !failedPreparationRoots.has(options.cwd)) {
+      failedPreparationRoots.add(options.cwd);
+      throw new Error("Scripted preparation failure");
+    }
+    return { command, args, cwd: options.cwd, exitCode: 0, stdout: "offline preparation complete\n", stderr: "" };
+  },
+};
 const projects = new ProjectManager(
   new ProjectRegistry(join(fixtureRoot, "projects.db")),
-  () => ({ adapter: new FakeAgentAdapter(), globalConfigStore: globalConfig }),
+  () => ({ adapter: new FakeAgentAdapter(), globalConfigStore: globalConfig, runner: preparationRunner }),
 );
 const memory = new MemoryService({ async run() { throw new Error("Engram intentionally unavailable in E2E"); } }, join(fixtureRoot, "codex.toml"));
 const limited = {

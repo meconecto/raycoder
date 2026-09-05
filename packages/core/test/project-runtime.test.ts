@@ -2,8 +2,9 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import type { AgentAdapter, AgentEvent, AgentSession, StartSessionInput } from "../src/agent-adapter.js";
 import { FakeAgentAdapter } from "../src/fake-agent-adapter.js";
-import { NodeProcessRunner } from "../src/process.js";
+import { NodeProcessRunner, type ProcessResult, type ProcessRunner } from "../src/process.js";
 import { ProjectManager } from "../src/project-manager.js";
 import { ProjectInspector } from "../src/project-inspector.js";
 import { ProjectInitializationConfirmationError, ProjectRegistry } from "../src/project-registry.js";
@@ -122,4 +123,57 @@ describe("ProjectRegistry and ProjectRuntime", () => {
     });
     manager.close();
   });
+
+  it("never starts the adapter until workspace preparation is durably PREPARED", async () => {
+    const globalRoot = mkdtempSync(join(tmpdir(), "raycoder-preparation-runtime-"));
+    temporaryDirectories.push(globalRoot);
+    const project = await gitFixture("preparation-runtime");
+    writeFileSync(join(project, "package.json"), JSON.stringify({ private: true, packageManager: "pnpm@11.19.0" }), "utf8");
+    writeFileSync(join(project, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n", "utf8");
+    await runner.run("git", ["add", "package.json", "pnpm-lock.yaml"], { cwd: project });
+    await runner.run("git", ["commit", "-m", "test: add node stack"], { cwd: project });
+    const adapter = new CountingAdapter();
+    const preparationRunner = new RuntimePreparationRunner();
+    const manager = new ProjectManager(
+      new ProjectRegistry(join(globalRoot, "projects.db")),
+      () => ({ adapter, runner: preparationRunner }),
+    );
+    const runtime = await manager.register(project);
+    runtime.tickets.create({ id: "prepared-first", title: "Prepared first", description: "gate adapter" });
+
+    await expect(runtime.scheduler.enqueue("prepared-first", { dirtyPolicy: "cancel" }))
+      .rejects.toMatchObject({ code: "preparation.approval_required" });
+    expect(adapter.starts).toBe(0);
+    const waiting = runtime.repository.latestWorkspacePreparationAttempt("prepared-first");
+    expect(waiting?.status).toBe("AWAITING_APPROVAL");
+    const fingerprint = waiting?.fingerprint;
+    if (fingerprint === undefined) throw new Error("Expected preparation fingerprint");
+
+    await runtime.scheduler.enqueue("prepared-first", {
+      dirtyPolicy: "cancel",
+      preparationApproval: { fingerprint, allowNetwork: true, allowInstallScripts: true, rememberForProject: true },
+    });
+
+    expect(runtime.repository.listWorkspacePreparationAttempts("prepared-first").some((attempt) => attempt.status === "PREPARED")).toBe(true);
+    expect(adapter.starts).toBeGreaterThan(0);
+    expect(runtime.repository.get("prepared-first").status).toBe("DONE");
+    manager.close();
+  }, 20_000);
 });
+
+class CountingAdapter implements AgentAdapter {
+  public starts = 0;
+  readonly #delegate = new FakeAgentAdapter();
+  public capabilities() { return this.#delegate.capabilities(); }
+  public preflight() { return this.#delegate.preflight(); }
+  public startSession(input: StartSessionInput): Promise<AgentSession> { this.starts += 1; return this.#delegate.startSession(input); }
+  public send(session: AgentSession, prompt: string): AsyncIterable<AgentEvent> { return this.#delegate.send(session, prompt); }
+  public cancel(session: AgentSession): Promise<void> { return this.#delegate.cancel(session); }
+}
+
+class RuntimePreparationRunner implements ProcessRunner {
+  public async run(command: string, args: readonly string[], options: { cwd: string; timeoutMs?: number; signal?: AbortSignal; env?: Readonly<Record<string, string>> }): Promise<ProcessResult> {
+    if (command === "git") return await runner.run(command, args, options);
+    return { command, args, cwd: options.cwd, exitCode: 0, stdout: args.includes("--version") ? `${command} 11.19.0\n` : "prepared\n", stderr: "" };
+  }
+}
