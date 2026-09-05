@@ -6,7 +6,12 @@ import { isPathInside } from "./git-workspace.js";
 import { NodeProcessRunner, ProcessExecutionError, type ProcessRunner } from "./process.js";
 import type { ProjectManager } from "./project-manager.js";
 import type { ProjectRuntime } from "./project-runtime.js";
-import type { WorkspacePreparationAttempt, WorkspacePreparationStatus } from "./ticket-repository.js";
+import type {
+  WorkspacePreparationAttempt,
+  WorkspacePreparationStatus,
+  WorkspaceVerificationAttempt,
+  WorkspaceVerificationStatus,
+} from "./ticket-repository.js";
 
 export type CleanupTargetKind =
   | "registration"
@@ -72,6 +77,14 @@ const riskyPreparationStatuses = new Set<WorkspacePreparationStatus>([
   "QUEUED",
   "PREPARING",
   "FAILED",
+  "INTERRUPTED",
+]);
+const riskyVerificationStatuses = new Set<WorkspaceVerificationStatus>([
+  "AWAITING_APPROVAL",
+  "QUEUED",
+  "VERIFYING",
+  "FAILED",
+  "UNAVAILABLE",
   "INTERRUPTED",
 ]);
 
@@ -223,6 +236,10 @@ export class ProjectCleanupService {
     for (const preparation of runtime.repository.listWorkspacePreparationAttempts()) {
       latestPreparationByWorkspace.set(resolve(preparation.workspace), preparation);
     }
+    const latestVerificationByWorkspace = new Map<string, WorkspaceVerificationAttempt>();
+    for (const verification of runtime.repository.listWorkspaceVerificationAttempts()) {
+      latestVerificationByWorkspace.set(resolve(verification.workspace), verification);
+    }
     const byIntegrationWorkspace = new Map(integrationAttempts
       .filter((attempt) => attempt.reconciliationWorkspace !== null)
       .map((attempt) => [resolve(attempt.reconciliationWorkspace as string), attempt]));
@@ -245,7 +262,9 @@ export class ProjectCleanupService {
       const riskyStatus = ticket !== undefined && riskyTicketStatuses.has(ticket.status);
       const preparation = latestPreparationByWorkspace.get(resolve(worktree.path));
       const riskyPreparation = preparation !== undefined && riskyPreparationStatuses.has(preparation.status);
-      const requiresForce = dirty || riskyStatus || riskyPreparation;
+      const verification = latestVerificationByWorkspace.get(resolve(worktree.path));
+      const riskyVerification = verification !== undefined && riskyVerificationStatuses.has(verification.status);
+      const requiresForce = dirty || riskyStatus || riskyPreparation || riskyVerification;
       const id = `worktree:${resolve(worktree.path)}`;
       targets.push({
         id,
@@ -266,6 +285,11 @@ export class ProjectCleanupService {
       if (riskyPreparation) warnings.push({
         code: "preparation.preserved",
         message: `Workspace preparation ${preparation.id} is ${preparation.status} and is preserved by default`,
+        targetId: id,
+      });
+      if (riskyVerification) warnings.push({
+        code: "verification.preserved",
+        message: `Workspace verification ${verification.id} is ${verification.status} and is preserved by default`,
         targetId: id,
       });
     }

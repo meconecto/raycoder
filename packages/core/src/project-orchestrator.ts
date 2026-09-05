@@ -3,13 +3,17 @@ import type { IntegrationOutcome, IntegrationService } from "./integration-servi
 import type { Ticket } from "./domain.js";
 import type { TicketRepository } from "./ticket-repository.js";
 import type { WorkspacePreparationApproval, WorkspacePreparationService } from "./workspace-preparation.js";
+import type { WorkspaceVerificationApproval, WorkspaceVerificationService } from "./workspace-verification.js";
 
 export interface ProjectOperationResult {
   readonly ticket: Ticket;
   readonly integration: IntegrationOutcome | null;
 }
 
-export type ProjectDispatchRequest = DispatchRequest & { readonly preparationApproval?: WorkspacePreparationApproval };
+export type ProjectDispatchRequest = DispatchRequest & {
+  readonly preparationApproval?: WorkspacePreparationApproval;
+  readonly verificationApproval?: WorkspaceVerificationApproval;
+};
 
 export class ProjectOperationBusyError extends Error {
   public constructor() {
@@ -30,6 +34,7 @@ export class ProjectOrchestrator {
   readonly #dispatcher: Dispatcher;
   readonly #integration: IntegrationService;
   readonly #preparation: WorkspacePreparationService | null;
+  readonly #verification: WorkspaceVerificationService | null;
   #operationActive = false;
 
   public constructor(
@@ -37,11 +42,13 @@ export class ProjectOrchestrator {
     dispatcher: Dispatcher,
     integration: IntegrationService,
     preparation: WorkspacePreparationService | null = null,
+    verification: WorkspaceVerificationService | null = null,
   ) {
     this.#repository = repository;
     this.#dispatcher = dispatcher;
     this.#integration = integration;
     this.#preparation = preparation;
+    this.#verification = verification;
   }
 
   public get integrationMode() {
@@ -52,6 +59,20 @@ export class ProjectOrchestrator {
     return this.#exclusive(async () => {
       if (this.#repository.listIntegrationAttempts().some((attempt) => attempt.status === "AWAITING_CONFIRMATION")) {
         throw new IntegrationConfirmationPendingError();
+      }
+      const ticket = this.#repository.get(request.ticketId);
+      if (
+        this.#verification !== null
+        && request.verificationApproval !== undefined
+        && ticket.workspace !== null
+        && ticket.baseCommit !== null
+      ) {
+        await this.#verification.authorize({
+          ticketId: ticket.id,
+          workspace: ticket.workspace,
+          targetCommit: ticket.baseCommit,
+          approval: request.verificationApproval,
+        });
       }
       const prepared = this.#preparation === null ? null : await this.#preparation.prepareTicket({
         ticketId: request.ticketId,
@@ -68,7 +89,11 @@ export class ProjectOrchestrator {
         }),
       });
       if (dispatched.status !== "READY_TO_MERGE") return { ticket: dispatched, integration: null };
-      const integration = await this.#integration.prepare(dispatched.id, request.preparationApproval);
+      const integration = await this.#integration.prepare(
+        dispatched.id,
+        request.preparationApproval,
+        request.verificationApproval,
+      );
       return { ticket: integration.ticket, integration };
     });
   }
@@ -77,8 +102,12 @@ export class ProjectOrchestrator {
     return this.#exclusive(() => this.#integration.confirm(attemptId, ticketId));
   }
 
-  public async retryIntegration(ticketId: string, preparationApproval?: WorkspacePreparationApproval): Promise<IntegrationOutcome> {
-    return this.#exclusive(() => this.#integration.retry(ticketId, preparationApproval));
+  public async retryIntegration(
+    ticketId: string,
+    preparationApproval?: WorkspacePreparationApproval,
+    verificationApproval?: WorkspaceVerificationApproval,
+  ): Promise<IntegrationOutcome> {
+    return this.#exclusive(() => this.#integration.retry(ticketId, preparationApproval, verificationApproval));
   }
 
   public async cancel(ticketId: string): Promise<Ticket> {

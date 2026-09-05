@@ -4,10 +4,11 @@ import type {
   PlanningSession,
   TicketRepository,
   WorkspacePreparationAttempt,
+  WorkspaceVerificationAttempt,
 } from "./ticket-repository.js";
 
 export type ActivitySeverity = "info" | "warning" | "error";
-export type ActivitySource = "planning" | "ticket" | "preparation" | "integration";
+export type ActivitySource = "planning" | "ticket" | "preparation" | "verification" | "integration";
 export type ActivityAction =
   | "retry_planning"
   | "resume_planning"
@@ -100,6 +101,10 @@ export class ProjectActivityService {
         attempt,
         this.#repository.latestWorkspacePreparationAttempt(attempt.ticketId),
       )),
+      ...this.#repository.listWorkspaceVerificationAttempts().map((attempt) => verificationItem(
+        attempt,
+        this.#repository.latestWorkspaceVerificationAttempt(attempt.ticketId, attempt.purpose),
+      )),
       ...this.#repository.listIntegrationAttempts().map((attempt) => integrationItem(
         attempt,
         this.#repository.latestIntegrationAttempt(attempt.ticketId),
@@ -109,6 +114,24 @@ export class ProjectActivityService {
       right.occurredAt.localeCompare(left.occurredAt) || right.id.localeCompare(left.id)
     ));
   }
+}
+
+function verificationItem(attempt: WorkspaceVerificationAttempt, latest: WorkspaceVerificationAttempt | null): ProjectActivityItem {
+  const attention = ["AWAITING_APPROVAL", "FAILED", "UNAVAILABLE", "INTERRUPTED"].includes(attempt.status);
+  return {
+    id: `verification:${attempt.id}`,
+    source: "verification",
+    severity: attempt.status === "FAILED" || attempt.status === "UNAVAILABLE" ? "error" : attention ? "warning" : "info",
+    status: attempt.status,
+    code: attempt.diagnosticCode,
+    title: "Workspace verification",
+    detail: attempt.diagnosticDetail,
+    occurredAt: attempt.completedAt ?? attempt.updatedAt,
+    ticketId: attempt.ticketId,
+    sessionId: null,
+    action: attempt.status === "AWAITING_APPROVAL" ? "open_settings" : attention ? "open_ticket" : null,
+    resolved: attention && latest?.id !== attempt.id,
+  };
 }
 
 const attentionTicketStatuses = new Set<TicketStatus>(["BLOCKED", "FAILED", "INTERRUPTED"]);

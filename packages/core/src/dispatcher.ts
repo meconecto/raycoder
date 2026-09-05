@@ -4,6 +4,11 @@ import type { DirtyWorkspacePolicy, GitWorkspaceManager } from "./git-workspace.
 import type { ReviewMode } from "./global-config.js";
 import type { Ticket } from "./domain.js";
 import type { GitMetadata, TicketRepository } from "./ticket-repository.js";
+import {
+  WorkspaceVerificationError,
+  type WorkspaceVerificationApproval,
+  type WorkspaceVerificationService,
+} from "./workspace-verification.js";
 
 export interface DispatchRequest {
   readonly ticketId: string;
@@ -12,6 +17,7 @@ export interface DispatchRequest {
   readonly model?: string;
   readonly effort?: string;
   readonly preparationSummary?: string;
+  readonly verificationApproval?: WorkspaceVerificationApproval;
 }
 
 interface ActiveDispatch {
@@ -45,6 +51,7 @@ export class Dispatcher {
   readonly #adapter: AgentAdapter;
   readonly #reviewAdapter: AgentAdapter;
   readonly #reviewMode: ReviewMode;
+  readonly #verification: WorkspaceVerificationService | null;
   #active: ActiveDispatch | null = null;
 
   public constructor(
@@ -53,12 +60,14 @@ export class Dispatcher {
     adapter: AgentAdapter,
     reviewAdapter: AgentAdapter = adapter,
     reviewMode: ReviewMode = "independent",
+    verification: WorkspaceVerificationService | null = null,
   ) {
     this.#repository = repository;
     this.#workspaces = workspaces;
     this.#adapter = adapter;
     this.#reviewAdapter = reviewAdapter;
     this.#reviewMode = reviewMode;
+    this.#verification = verification;
   }
 
   public async dispatch(request: DispatchRequest): Promise<Ticket> {
@@ -76,7 +85,6 @@ export class Dispatcher {
         baseBranch: ticket.baseBranch,
         baseCommit: ticket.baseCommit,
       };
-      if (ticket.status !== "RUNNING") this.#repository.transition(ticket.id, "RUNNING", "existing_workspace_resumed");
     } else {
       if (ticket.status !== "READY") throw new Error(`Ticket ${ticket.id} has no resumable workspace`);
       metadata = await this.#workspaces.create({
@@ -94,7 +102,24 @@ export class Dispatcher {
         isClean: true,
         source: "workspace_created",
       });
-      this.#repository.transition(ticket.id, "RUNNING", "workspace_created_from_base_head");
+    }
+
+    if (this.#verification !== null) {
+      await this.#verification.authorize({
+        ticketId: ticket.id,
+        workspace: metadata.workspace,
+        targetCommit: metadata.baseCommit,
+        ...(request.verificationApproval === undefined ? {} : { approval: request.verificationApproval }),
+      });
+    }
+
+    const authorizedTicket = this.#repository.get(ticket.id);
+    if (authorizedTicket.status !== "RUNNING") {
+      this.#repository.transition(
+        ticket.id,
+        "RUNNING",
+        ticket.workspace === null ? "workspace_created_from_base_head" : "existing_workspace_resumed",
+      );
     }
 
     let session: AgentSession;
@@ -152,14 +177,25 @@ export class Dispatcher {
         this.#repository.updateAgentSession(persistedSessionId, { status: "failed" });
         return this.#repository.transition(ticket.id, "FAILED", "agent_completed_without_commit");
       }
+      const implementedHead = await this.#workspaces.head(metadata.workspace);
       this.#repository.recordGitObservation({
         ticketId: ticket.id,
         workspace: metadata.workspace,
-        head: await this.#workspaces.head(metadata.workspace),
+        head: implementedHead,
         branch: metadata.branch,
         isClean: null,
         source: "implementation_completed",
       });
+
+      if (this.#verification !== null) {
+        this.#repository.updateAgentSession(persistedSessionId, { status: "completed" });
+        await this.#verification.verify({
+          ticketId: ticket.id,
+          workspace: metadata.workspace,
+          targetCommit: implementedHead,
+          ...(request.verificationApproval === undefined ? {} : { approval: request.verificationApproval }),
+        });
+      }
 
       this.#repository.transition(ticket.id, "REVIEW", "implementation_committed");
       let reviewSession: AgentSession;
@@ -224,6 +260,7 @@ export class Dispatcher {
       return this.#repository.transition(ticket.id, "READY_TO_MERGE", "review_approved");
     } catch (error) {
       const current = this.#repository.get(ticket.id);
+      if (error instanceof WorkspaceVerificationError) throw error;
       this.#repository.updateAgentSession(persistedSessionId, { status: "failed" });
       if (current.status === "RUNNING" || current.status === "REVIEW") {
         this.#repository.transition(ticket.id, "FAILED", "agent_adapter_exception");
@@ -235,6 +272,7 @@ export class Dispatcher {
   }
 
   public async cancel(ticketId: string): Promise<Ticket> {
+    if (await this.#verification?.cancel(ticketId) === true) return this.#repository.get(ticketId);
     if (this.#active === null || this.#active.ticketId !== ticketId) {
       throw new Error(`Ticket ${ticketId} is not active in this dispatcher`);
     }

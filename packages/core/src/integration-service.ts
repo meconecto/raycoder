@@ -4,9 +4,14 @@ import { join, resolve } from "node:path";
 import type { IntegrationMode, Ticket } from "./domain.js";
 import { isPathInside } from "./git-workspace.js";
 import { NodeProcessRunner, ProcessExecutionError, type ProcessRunner } from "./process.js";
-import { NodeProjectVerifier, type ProjectVerifier } from "./project-verifier.js";
-import type { IntegrationAttempt, TicketRepository } from "./ticket-repository.js";
+import { NodeProjectVerifier, type ProjectVerifier, type VerificationResult } from "./project-verifier.js";
+import type { IntegrationAttempt, TicketRepository, WorkspaceVerificationAttempt } from "./ticket-repository.js";
 import { WorkspacePreparationError, type WorkspacePreparationApproval, type WorkspacePreparationService } from "./workspace-preparation.js";
+import {
+  WorkspaceVerificationError,
+  type WorkspaceVerificationApproval,
+  type WorkspaceVerificationService,
+} from "./workspace-verification.js";
 
 export type IntegrationOutcomeKind = "integrated" | "awaiting_confirmation" | "blocked";
 
@@ -32,12 +37,18 @@ export class IntegrationService {
   readonly #runner: ProcessRunner;
   readonly #verifier: ProjectVerifier;
   readonly #preparation: WorkspacePreparationService | null;
+  readonly #verification: WorkspaceVerificationService | null;
 
   public constructor(
     repository: TicketRepository,
     projectRoot: string,
     mode: IntegrationMode,
-    options: { runner?: ProcessRunner; verifier?: ProjectVerifier; preparation?: WorkspacePreparationService } = {},
+    options: {
+      runner?: ProcessRunner;
+      verifier?: ProjectVerifier;
+      preparation?: WorkspacePreparationService;
+      verification?: WorkspaceVerificationService;
+    } = {},
   ) {
     this.#repository = repository;
     this.#projectRoot = resolve(projectRoot);
@@ -47,13 +58,18 @@ export class IntegrationService {
       installDependencies: options.preparation === undefined,
     });
     this.#preparation = options.preparation ?? null;
+    this.#verification = options.verifier === undefined ? options.verification ?? null : null;
   }
 
   public get mode(): IntegrationMode {
     return this.#mode;
   }
 
-  public async prepare(ticketId: string, preparationApproval?: WorkspacePreparationApproval): Promise<IntegrationOutcome> {
+  public async prepare(
+    ticketId: string,
+    preparationApproval?: WorkspacePreparationApproval,
+    verificationApproval?: WorkspaceVerificationApproval,
+  ): Promise<IntegrationOutcome> {
     const ticket = this.#repository.get(ticketId);
     assertIntegrableTicket(ticket);
     const ticketHead = await this.#revParse(ticket.workspace, "HEAD");
@@ -113,6 +129,21 @@ export class IntegrationService {
     }
 
     const targetCommit = await this.#revParse(reconciliationWorkspace, "HEAD");
+    if (this.#verification !== null && verificationApproval !== undefined) {
+      try {
+        await this.#verification.authorize({
+          ticketId,
+          workspace: reconciliationWorkspace,
+          targetCommit,
+          purpose: "integration",
+          integrationAttemptId: attempt.id,
+          approval: verificationApproval,
+        });
+      } catch (error) {
+        if (error instanceof WorkspaceVerificationError) this.#block(attempt.id, error.code, error.message);
+        throw error;
+      }
+    }
     if (this.#preparation !== null) {
       try {
         await this.#preparation.prepareTicket({
@@ -147,7 +178,24 @@ export class IntegrationService {
         throw error;
       }
     }
-    const verification = await this.#verifier.verify(reconciliationWorkspace);
+    let verification;
+    try {
+      verification = this.#verification === null
+        ? await this.#verifier.verify(reconciliationWorkspace)
+        : verificationResult(await this.#verification.verify({
+            ticketId,
+            workspace: reconciliationWorkspace,
+            targetCommit,
+            purpose: "integration",
+            integrationAttemptId: attempt.id,
+            ...(verificationApproval === undefined ? {} : { approval: verificationApproval }),
+          }));
+    } catch (error) {
+      if (error instanceof WorkspaceVerificationError) {
+        this.#block(attempt.id, error.code, error.message);
+      }
+      throw error;
+    }
     this.#repository.updateIntegrationAttempt(attempt.id, {
       targetCommit,
       verificationStatus: verification.status,
@@ -179,7 +227,11 @@ export class IntegrationService {
     return this.#apply(attemptId);
   }
 
-  public async retry(ticketId: string, preparationApproval?: WorkspacePreparationApproval): Promise<IntegrationOutcome> {
+  public async retry(
+    ticketId: string,
+    preparationApproval?: WorkspacePreparationApproval,
+    verificationApproval?: WorkspaceVerificationApproval,
+  ): Promise<IntegrationOutcome> {
     const ticket = this.#repository.get(ticketId);
     const latest = this.#repository.latestIntegrationAttempt(ticketId);
     if (
@@ -191,7 +243,7 @@ export class IntegrationService {
       throw new Error(`Ticket ${ticketId} is not blocked by an integration attempt`);
     }
     this.#repository.resolveBlocked(ticketId, "integration_retry_requested", "READY_TO_MERGE");
-    return this.prepare(ticketId, preparationApproval);
+    return this.prepare(ticketId, preparationApproval, verificationApproval);
   }
 
   async #readyOrApply(attemptId: string): Promise<IntegrationOutcome> {
@@ -322,6 +374,20 @@ export class IntegrationService {
   async #git(cwd: string, args: readonly string[]) {
     return this.#runner.run("git", args, { cwd, timeoutMs: 60_000 });
   }
+}
+
+function verificationResult(attempt: WorkspaceVerificationAttempt): VerificationResult {
+  const plan = attempt.plan as { units?: readonly { commands?: readonly { display?: unknown }[] }[] };
+  const commands = (plan.units ?? []).flatMap((unit) => (unit.commands ?? []).flatMap((command) => (
+    typeof command.display === "string" ? [command.display] : []
+  )));
+  return {
+    status: attempt.status === "PASSED" ? "PASSED" : attempt.status === "FAILED" ? "FAILED" : "UNAVAILABLE",
+    commands,
+    output: attempt.output ?? "",
+    diagnosticCode: attempt.diagnosticCode,
+    diagnosticDetail: attempt.diagnosticDetail,
+  };
 }
 
 export interface IntegrationRecoveryEvidence {

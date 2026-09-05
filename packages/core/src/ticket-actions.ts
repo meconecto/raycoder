@@ -6,6 +6,7 @@ import type { ProjectOrchestrator } from "./project-orchestrator.js";
 import type { Scheduler } from "./scheduler.js";
 import type { TicketRepository } from "./ticket-repository.js";
 import type { WorkspacePreparationApproval } from "./workspace-preparation.js";
+import type { WorkspaceVerificationApproval } from "./workspace-verification.js";
 
 export class TicketActions {
   readonly #repository: TicketRepository;
@@ -56,11 +57,12 @@ export class TicketActions {
     ticketId: string,
     dirtyPolicy: DirtyWorkspacePolicy = "cancel",
     preparationApproval?: WorkspacePreparationApproval,
+    verificationApproval?: WorkspaceVerificationApproval,
   ) {
     return this.#scheduler.serialize(async () => {
       const ticket = this.#repository.get(ticketId);
       if (ticket.status === "BLOCKED" && ticket.blockedFrom === "READY_TO_MERGE") {
-        return await this.#orchestrator.retryIntegration(ticketId, preparationApproval);
+        return await this.#orchestrator.retryIntegration(ticketId, preparationApproval, verificationApproval);
       }
       let dispatchStatus = ticket.status;
       if (ticket.status === "BLOCKED") {
@@ -86,6 +88,7 @@ export class TicketActions {
         projectRoot: this.#projectRoot,
         dirtyPolicy,
         ...(preparationApproval === undefined ? {} : { preparationApproval }),
+        ...(verificationApproval === undefined ? {} : { verificationApproval }),
       });
     });
   }
