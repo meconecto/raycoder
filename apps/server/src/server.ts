@@ -13,6 +13,8 @@ import type {
   ProjectRuntime,
   SpecContent,
   TicketRepository,
+  WorkspacePreparationApproval,
+  WorkspacePreparationConfig,
 } from "@raycoder/core";
 import {
   createTicket,
@@ -22,7 +24,9 @@ import {
   PlanningInvalidStateError,
   PlanningResumeUnsupportedError,
   ProjectCleanupService,
+  ProjectOperationBusyError,
   UnknownTicketError,
+  WorkspacePreparationError,
 } from "@raycoder/core";
 import type { RaycoderApplicationHost } from "./application-host.js";
 import { NativeDirectoryPicker, type DirectoryPicker } from "./platform.js";
@@ -296,6 +300,40 @@ async function routeProjects(
     });
     return true;
   }
+  if (request.method === "GET" && tail === "preparation") {
+    let detectedPlan: unknown = null;
+    let diagnostic: { code: string; error: string; details?: unknown } | null = null;
+    try {
+      detectedPlan = await runtime.preparation.inspect(runtime.projectRoot);
+    } catch (error) {
+      const preparationError = asWorkspacePreparationError(error);
+      if (preparationError !== null) {
+        diagnostic = {
+          code: preparationError.code,
+          error: preparationError.message,
+          ...(preparationError.details === undefined ? {} : { details: preparationError.details }),
+        };
+      } else throw error;
+    }
+    sendJson(response, 200, {
+      config: runtime.preparation.config(),
+      approval: runtime.preparation.approval(),
+      detectedPlan,
+      diagnostic,
+      attempts: runtime.repository.listWorkspacePreparationAttempts(),
+    });
+    return true;
+  }
+  if (request.method === "PUT" && tail === "preparation/config") {
+    const body = await readJson(request);
+    sendJson(response, 200, { config: runtime.preparation.setConfig(body as unknown as WorkspacePreparationConfig) });
+    return true;
+  }
+  if (request.method === "DELETE" && tail === "preparation/approval") {
+    runtime.preparation.revokeApproval();
+    sendJson(response, 200, { approval: null });
+    return true;
+  }
   if (request.method === "POST" && tail === "settings") {
     if (runtime.settings === null) {
       sendJson(response, 409, { error: "This runtime has no global configuration store" });
@@ -553,7 +591,7 @@ async function routeProjects(
     return true;
   }
 
-  const ticketMatch = /^tickets\/([^/]+)\/(history|sessions|dependencies|actions)$/u.exec(tail);
+  const ticketMatch = /^tickets\/([^/]+)\/(history|sessions|dependencies|preparation|actions)$/u.exec(tail);
   if (ticketMatch === null) return false;
   const encodedTicketId = ticketMatch[1];
   const resource = ticketMatch[2];
@@ -573,6 +611,14 @@ async function routeProjects(
         ...session,
         processObservations: runtime.repository.processObservations(session.id),
       })),
+    });
+    return true;
+  }
+  if (request.method === "GET" && resource === "preparation") {
+    runtime.repository.get(ticketId);
+    sendJson(response, 200, {
+      attempts: runtime.repository.listWorkspacePreparationAttempts(ticketId),
+      latest: runtime.repository.latestWorkspacePreparationAttempt(ticketId),
     });
     return true;
   }
@@ -596,8 +642,13 @@ async function routeProjects(
         sendError(response, 409, "project.baseline_required", new Error("Create the first Git commit before running tickets"));
         return true;
       }
+      if (runtime.scheduler.pendingCount !== 0) throw new ProjectOperationBusyError();
       const dirtyPolicy = body.dirtyPolicy === "committed-head" ? "committed-head" : "cancel";
-      sendJson(response, 202, await runtime.scheduler.enqueue(ticketId, { dirtyPolicy }));
+      const preparationApproval = readPreparationApproval(body.preparationApproval);
+      sendJson(response, 202, await runtime.scheduler.enqueue(ticketId, {
+        dirtyPolicy,
+        ...(preparationApproval === undefined ? {} : { preparationApproval }),
+      }));
       return true;
     }
     if (body.action === "retry") {
@@ -609,7 +660,12 @@ async function routeProjects(
         sendError(response, 409, "project.baseline_required", new Error("Create the first Git commit before retrying tickets"));
         return true;
       }
-      sendJson(response, 200, await runtime.tickets.retry(ticketId, body.dirtyPolicy === "committed-head" ? "committed-head" : "cancel"));
+      if (runtime.scheduler.pendingCount !== 0) throw new ProjectOperationBusyError();
+      sendJson(response, 200, await runtime.tickets.retry(
+        ticketId,
+        body.dirtyPolicy === "committed-head" ? "committed-head" : "cancel",
+        readPreparationApproval(body.preparationApproval),
+      ));
       return true;
     }
     if (body.action === "cancel") {
@@ -636,6 +692,7 @@ function serializeTickets(runtime: ProjectRuntime): unknown[] {
     planningArtifactId: runtime.repository.ticketPlanningArtifactId(ticket.id),
     integrationAttempt: runtime.repository.latestIntegrationAttempt(ticket.id),
     review: runtime.repository.reviewDecisions(ticket.id).at(-1) ?? null,
+    preparation: runtime.repository.latestWorkspacePreparationAttempt(ticket.id),
   }));
 }
 
@@ -687,12 +744,39 @@ function providerAvailable(preflight: PreflightReport | undefined, response: Ser
   return false;
 }
 
+function readPreparationApproval(value: unknown): WorkspacePreparationApproval | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new WorkspacePreparationError("preparation.plan_changed", "preparationApproval must be an object");
+  }
+  const row = value as Record<string, unknown>;
+  if (typeof row.fingerprint !== "string" || row.allowNetwork !== true
+    || row.allowInstallScripts !== true || row.rememberForProject !== true) {
+    throw new WorkspacePreparationError("preparation.plan_changed", "Preparation approval is incomplete or stale");
+  }
+  return {
+    fingerprint: row.fingerprint,
+    allowNetwork: true,
+    allowInstallScripts: true,
+    rememberForProject: true,
+  };
+}
+
 function httpError(error: unknown): { status: number; code: string; details?: unknown } {
+  const preparationError = asWorkspacePreparationError(error);
+  if (preparationError !== null) {
+    return {
+      status: preparationError.code === "preparation.custom_step_invalid" ? 400 : 409,
+      code: preparationError.code,
+      details: preparationError.details,
+    };
+  }
   if (error instanceof DependencyCycleError) return { status: 409, code: "planning.cycle" };
   if (error instanceof UnknownTicketError) return { status: 409, code: "planning.ticket_reference_invalid" };
   if (error instanceof PlanningBusyError) return { status: 409, code: "planning.operation_busy" };
   if (error instanceof PlanningResumeUnsupportedError) return { status: 409, code: "planning.resume_unsupported" };
   if (error instanceof PlanningInvalidStateError) return { status: 409, code: "planning.revision_invalid" };
+  if (error instanceof ProjectOperationBusyError) return { status: 409, code: "operation_busy" };
   if (error instanceof PlanningGenerationError) {
     return { status: 502, code: "planning.generation_failed", details: { providerCode: error.providerCode } };
   }
@@ -704,6 +788,18 @@ function httpError(error: unknown): { status: number; code: string; details?: un
     return { status: 404, code: "planning.revision_invalid" };
   }
   return { status: 500, code: errorCode(error) };
+}
+
+function asWorkspacePreparationError(error: unknown): { code: string; message: string; details?: unknown } | null {
+  if (error instanceof WorkspacePreparationError) return error;
+  if (!(error instanceof Error) || error.name !== "WorkspacePreparationError") return null;
+  const candidate = error as Error & { readonly code?: unknown; readonly details?: unknown };
+  if (typeof candidate.code !== "string" || !candidate.code.startsWith("preparation.")) return null;
+  return {
+    code: candidate.code,
+    message: candidate.message,
+    ...(candidate.details === undefined ? {} : { details: candidate.details }),
+  };
 }
 
 function errorCode(error: unknown): string {

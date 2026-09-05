@@ -12,6 +12,8 @@ const state = {
   dependencies: [],
   planning: null,
   capabilities: null,
+  preparation: null,
+  pendingPreparationAction: null,
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -27,12 +29,21 @@ function esc(value) {
 async function json(url, options) {
   const response = await fetch(url, options);
   const body = await response.json();
-  if (!response.ok) throw new Error(body.error || response.statusText);
+  if (!response.ok) {
+    const error = new Error(body.error || response.statusText);
+    error.code = body.code;
+    error.details = body.details;
+    throw error;
+  }
   return body;
 }
 
 function mutation(body) {
   return { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) };
+}
+
+function mutationMethod(method, body) {
+  return { method, headers: { "content-type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) };
 }
 
 async function loadGlobal() {
@@ -140,14 +151,15 @@ function base() {
 
 async function refreshProject() {
   if (!state.project) return;
-  const [ticketData, dependencyData, planning, capabilities, inspection] = await Promise.all([
-    json(`${base()}/tickets`), json(`${base()}/dependencies`), json(`${base()}/planning`), json(`${base()}/capabilities`), json(`${base()}/inspection`),
+  const [ticketData, dependencyData, planning, capabilities, inspection, preparation] = await Promise.all([
+    json(`${base()}/tickets`), json(`${base()}/dependencies`), json(`${base()}/planning`), json(`${base()}/capabilities`), json(`${base()}/inspection`), json(`${base()}/preparation`),
   ]);
   state.tickets = ticketData.tickets;
   state.dependencies = dependencyData.dependencies;
   state.planning = planning;
   state.capabilities = capabilities;
   state.inspection = inspection;
+  state.preparation = preparation;
   render();
 }
 
@@ -174,7 +186,8 @@ function ticketCard(ticket) {
   if (["FAILED", "BLOCKED", "INTERRUPTED", "CHANGES_REQUESTED"].includes(ticket.status)) buttons.push(`<button data-ticket-action="retry" data-ticket="${esc(ticket.id)}" ${allowed ? "" : "disabled"}>Retry</button>`);
   if (attempt?.status === "AWAITING_CONFIRMATION") buttons.push(`<button data-ticket-action="confirm" data-attempt="${esc(attempt.id)}" data-ticket="${esc(ticket.id)}" class="primary">Confirm</button>`);
   if (!["DONE", "CANCELLED"].includes(ticket.status)) buttons.push(`<button data-ticket-action="cancel" data-ticket="${esc(ticket.id)}">Cancel</button>`);
-  return `<article class="card"><div class="row"><h3>${esc(ticket.title)}</h3><span class="status ${esc(ticket.status)}">${esc(ticket.status)}</span></div><p>${esc(ticket.description)}</p><small class="muted">${esc(ticket.id)}${ticket.branch ? ` · ${esc(ticket.branch)}` : ""}</small>${ticket.review ? `<p><small>Review: ${esc(ticket.review.verdict)} — ${esc(ticket.review.summary)}</small></p>` : ""}${attempt?.diagnosticCode ? `<p class="error">${esc(attempt.diagnosticCode)} · ${esc(attempt.diagnosticDetail)}</p>` : ""}<div class="actions">${buttons.join("")}</div></article>`;
+  const preparation = ticket.preparation;
+  return `<article class="card"><div class="row"><h3>${esc(ticket.title)}</h3><span class="status ${esc(ticket.status)}">${esc(ticket.status)}</span></div><p>${esc(ticket.description)}</p><small class="muted">${esc(ticket.id)}${ticket.branch ? ` · ${esc(ticket.branch)}` : ""}</small>${preparation ? `<p><small>Preparation: <span class="status ${esc(preparation.status)}">${esc(preparation.status)}</span> · ${esc(preparation.strategy)}</small></p>` : ""}${preparation?.diagnosticDetail ? `<p class="error">${esc(preparation.diagnosticCode)} · ${esc(preparation.diagnosticDetail)}</p>` : ""}${preparation?.output ? `<details><summary>Preparation output</summary><pre>${esc(preparation.output.slice(0, 2_000))}</pre></details>` : ""}${ticket.review ? `<p><small>Review: ${esc(ticket.review.verdict)} — ${esc(ticket.review.summary)}</small></p>` : ""}${attempt?.diagnosticCode ? `<p class="error">${esc(attempt.diagnosticCode)} · ${esc(attempt.diagnosticDetail)}</p>` : ""}<div class="actions">${buttons.join("")}</div></article>`;
 }
 
 function renderOverview() {
@@ -309,6 +322,51 @@ function readTicketPlanRows() {
   }));
 }
 
+const preparationStrategies = ["pnpm", "npm", "yarn", "bun", "uv", "poetry", "pipenv", "cargo", "go", "bash", "pwsh"];
+
+function preparationUnitRow(unit = { root: ".", strategy: "pnpm" }) {
+  const shell = ["bash", "pwsh"].includes(unit.strategy);
+  return `<div class="ticket-plan-row" data-preparation-unit>
+    <div class="row"><strong>Preparation unit</strong><div class="actions"><button data-preparation-up title="Move up">↑</button><button data-preparation-down title="Move down">↓</button><button data-remove-preparation title="Remove unit">Remove</button></div></div>
+    <label>Repository-relative root<input data-preparation-root value="${esc(unit.root || ".")}" placeholder="packages/api"></label>
+    <label>Strategy<select data-preparation-strategy>${preparationStrategies.map((strategy) => `<option value="${strategy}" ${strategy === unit.strategy ? "selected" : ""}>${strategy}</option>`).join("")}</select></label>
+    <label data-preparation-shell class="${shell ? "" : "hidden"}">Tracked script<input data-preparation-script value="${esc(unit.script || "")}" placeholder="scripts/prepare.sh"></label>
+    <label data-preparation-shell class="${shell ? "" : "hidden"}">Literal arguments <small>one per line; never interpolated by a shell</small><textarea data-preparation-args>${esc((unit.args || []).join("\n"))}</textarea></label>
+  </div>`;
+}
+
+function readPreparationConfig() {
+  if ($("#preparation-mode").value === "auto") return { mode: "auto" };
+  return {
+    mode: "explicit",
+    units: [...document.querySelectorAll("[data-preparation-unit]")].map((row) => {
+      const strategy = row.querySelector("[data-preparation-strategy]").value;
+      const unit = { root: row.querySelector("[data-preparation-root]").value.trim(), strategy };
+      if (["bash", "pwsh"].includes(strategy)) {
+        unit.script = row.querySelector("[data-preparation-script]").value.trim();
+        unit.args = row.querySelector("[data-preparation-args]").value.split("\n").map((value) => value.trim()).filter(Boolean);
+      }
+      return unit;
+    }),
+  };
+}
+
+function syncPreparationEditor() {
+  const explicit = $("#preparation-mode")?.value === "explicit";
+  $("#preparation-unit-editor")?.classList.toggle("hidden", !explicit);
+  $("#add-preparation-unit")?.classList.toggle("hidden", !explicit);
+  if (explicit && document.querySelectorAll("[data-preparation-unit]").length === 0) {
+    $("#preparation-unit-editor").insertAdjacentHTML("beforeend", preparationUnitRow());
+  }
+}
+
+function renderDetectedPreparation(preparation) {
+  if (preparation.diagnostic) return `<p class="error">${esc(preparation.diagnostic.code)} · ${esc(preparation.diagnostic.error)}</p>`;
+  const plan = preparation.detectedPlan;
+  if (!plan?.applicable) return '<p class="muted">No preparation applies to this project.</p>';
+  return `<div class="ticket-plan-rows">${plan.units.map((unit) => `<article class="target"><span><strong>${esc(unit.strategy)} · ${esc(unit.root)}</strong><small>${unit.commands.map((command) => esc(command.display)).join("<br>")}</small><small>${esc(unit.executablePath || "tool unavailable")} · ${esc(unit.toolVersion)}</small></span></article>`).join("")}</div><small class="muted">Fingerprint ${esc(plan.fingerprint)}</small>`;
+}
+
 function renderTickets() {
   content.className = "stack";
   content.innerHTML = `<div class="grid">${state.tickets.map(ticketCard).join("") || '<div class="empty">No tickets.</div>'}</div><article class="card"><h3>Create ticket</h3><input id="ticket-title" placeholder="Title"><textarea id="ticket-description" placeholder="What this vertical slice delivers"></textarea><input id="ticket-predecessors" placeholder="Predecessor ids, comma separated"><button id="create-ticket" class="primary">Create</button></article>`;
@@ -322,8 +380,8 @@ function renderDag() {
 async function renderHistory() {
   content.className = "stack";
   content.innerHTML = '<div class="empty">Loading history…</div>';
-  const rows = await Promise.all(state.tickets.map(async (ticket) => ({ ticket, data: await json(`${base()}/tickets/${encodeURIComponent(ticket.id)}/history`) })));
-  content.innerHTML = rows.map(({ ticket, data }) => `<article class="card"><h3>${esc(ticket.title)}</h3><pre>${esc(data.history.map((entry) => `${entry.createdAt}  ${entry.fromStatus || "∅"} → ${entry.toStatus}  ${entry.reason}`).join("\n"))}</pre></article>`).join("") || '<div class="empty">No history.</div>';
+  const rows = await Promise.all(state.tickets.map(async (ticket) => ({ ticket, data: await json(`${base()}/tickets/${encodeURIComponent(ticket.id)}/history`), preparation: await json(`${base()}/tickets/${encodeURIComponent(ticket.id)}/preparation`) })));
+  content.innerHTML = rows.map(({ ticket, data, preparation }) => `<article class="card"><h3>${esc(ticket.title)}</h3><pre>${esc(data.history.map((entry) => `${entry.createdAt}  ${entry.fromStatus || "∅"} → ${entry.toStatus}  ${entry.reason}`).join("\n"))}</pre>${preparation.attempts.length ? `<h4>Workspace preparation</h4><pre>${esc(JSON.stringify(preparation.attempts, null, 2))}</pre>` : ""}</article>`).join("") || '<div class="empty">No history.</div>';
 }
 
 async function renderSessions() {
@@ -336,8 +394,33 @@ async function renderSessions() {
 async function renderSettings() {
   content.className = "stack";
   content.innerHTML = '<div class="empty">Loading settings…</div>';
-  const settings = await json(`${base()}/settings`);
-  content.innerHTML = `<div class="grid"><article class="card"><h3>Effective</h3><pre>${esc(JSON.stringify(settings?.effective, null, 2))}</pre></article><article class="card"><h3>Capabilities</h3><pre>${esc(JSON.stringify(state.capabilities, null, 2))}</pre></article></div><article class="card"><h3>Project override</h3><textarea id="settings-override">${esc(JSON.stringify(settings?.override || {}, null, 2))}</textarea><button id="save-settings" class="primary">Validate and save</button></article><article class="card"><h3>Safe cleanup</h3><p>Preview registered worktrees, branches, metadata and global registration before deleting anything.</p><button id="plan-cleanup" class="danger-button">Build cleanup plan</button></article>`;
+  const [settings, preparation] = await Promise.all([json(`${base()}/settings`), json(`${base()}/preparation`)]);
+  const units = preparation.config.mode === "explicit" ? preparation.config.units || [] : [];
+  content.innerHTML = `<div class="grid"><article class="card"><h3>Effective</h3><pre>${esc(JSON.stringify(settings?.effective, null, 2))}</pre></article><article class="card"><h3>Capabilities</h3><pre>${esc(JSON.stringify(state.capabilities, null, 2))}</pre></article></div><article class="card"><h3>Project override</h3><textarea id="settings-override">${esc(JSON.stringify(settings?.override || {}, null, 2))}</textarea><button id="save-settings" class="primary">Validate and save</button></article><article class="card"><h3>Workspace preparation</h3><p>Auto-detection handles one unambiguous root stack. Mixed repositories use ordered units; shell steps must point to tracked Bash or PowerShell files.</p><label>Detection mode<select id="preparation-mode"><option value="auto" ${preparation.config.mode === "auto" ? "selected" : ""}>Auto-detect root stack</option><option value="explicit" ${preparation.config.mode === "explicit" ? "selected" : ""}>Explicit ordered units</option></select></label><div id="preparation-unit-editor" class="ticket-plan-rows ${preparation.config.mode === "explicit" ? "" : "hidden"}">${units.map(preparationUnitRow).join("")}</div><div class="actions"><button id="add-preparation-unit" class="${preparation.config.mode === "explicit" ? "" : "hidden"}">Add unit</button><button id="save-preparation" class="primary">Save preparation</button><button id="revoke-preparation" ${preparation.approval ? "" : "disabled"}>Revoke approval</button></div>${renderDetectedPreparation(preparation)}</article><article class="card"><h3>Future Auto mode</h3><p>Automatic sequential ticket execution is planned as an opt-in feature. Manual Run remains the default.</p></article><article class="card"><h3>Safe cleanup</h3><p>Preview registered worktrees, branches, metadata and global registration before deleting anything.</p><button id="plan-cleanup" class="danger-button">Build cleanup plan</button></article>`;
+}
+
+function showPreparationApproval(error, request) {
+  const plan = error.details?.plan;
+  if (!plan) throw error;
+  state.pendingPreparationAction = { request, fingerprint: plan.fingerprint };
+  $("#preparation-commands").innerHTML = plan.units.map((unit) => `<article class="target"><span><strong>${esc(unit.strategy)} · ${esc(unit.root)}</strong><small>${unit.commands.map((command) => esc(command.display)).join("<br>")}</small><small>${esc(unit.executablePath || "tool unavailable")} · ${esc(unit.toolVersion)}</small></span></article>`).join("");
+  $("#preparation-fingerprint").textContent = `Fingerprint ${plan.fingerprint}`;
+  $("#preparation-dialog").showModal();
+}
+
+async function executeTicketAction(ticketId, body) {
+  try {
+    return await json(`${base()}/tickets/${encodeURIComponent(ticketId)}/actions`, mutation(body));
+  } catch (error) {
+    if (["preparation.approval_required", "preparation.plan_changed"].includes(error.code)) {
+      showPreparationApproval(error, {
+        ticketId,
+        body: error.details?.purpose === "integration" ? { ...body, action: "retry" } : body,
+      });
+      return null;
+    }
+    throw error;
+  }
 }
 
 async function refreshPreview() {
@@ -456,7 +539,7 @@ $("#content").addEventListener("click", (event) => {
           body.dirtyPolicy = "committed-head";
         } else body.dirtyPolicy = "cancel";
       }
-      await json(`${base()}/tickets/${encodeURIComponent(target.dataset.ticket)}/actions`, mutation(body));
+      await executeTicketAction(target.dataset.ticket, body);
     });
     return;
   }
@@ -501,8 +584,22 @@ $("#content").addEventListener("click", (event) => {
   }
   if (target.dataset.confirmPlan) { void action(() => json(`${base()}/planning/dag/confirm`, mutation({ artifactId: target.dataset.confirmPlan }))); return; }
   if (target.id === "save-settings") { void action(() => json(`${base()}/settings`, mutation({ override: JSON.parse($("#settings-override").value) }))); return; }
+  if (target.id === "add-preparation-unit") { $("#preparation-unit-editor").insertAdjacentHTML("beforeend", preparationUnitRow()); return; }
+  if (target.dataset.removePreparation !== undefined) { target.closest("[data-preparation-unit]")?.remove(); return; }
+  if (target.dataset.preparationUp !== undefined) { const row = target.closest("[data-preparation-unit]"); if (row?.previousElementSibling) row.parentElement.insertBefore(row, row.previousElementSibling); return; }
+  if (target.dataset.preparationDown !== undefined) { const row = target.closest("[data-preparation-unit]"); if (row?.nextElementSibling) row.parentElement.insertBefore(row.nextElementSibling, row); return; }
+  if (target.id === "save-preparation") { void action(() => json(`${base()}/preparation/config`, mutationMethod("PUT", readPreparationConfig()))); return; }
+  if (target.id === "revoke-preparation") { void action(() => json(`${base()}/preparation/approval`, mutationMethod("DELETE"))); return; }
   if (target.id === "plan-cleanup") { void action(buildCleanupPlan, false); return; }
   if (target.dataset.preview) { const active = state.tickets.find((ticket) => ["RUNNING", "REVIEW", "CHANGES_REQUESTED", "READY_TO_MERGE"].includes(ticket.status)); void action(() => json(`${base()}/preview`, mutation({ action: target.dataset.preview, ticketId: active?.id }))); }
+});
+$("#content").addEventListener("change", (event) => {
+  if (event.target.id === "preparation-mode") { syncPreparationEditor(); return; }
+  if (event.target.matches("[data-preparation-strategy]")) {
+    const row = event.target.closest("[data-preparation-unit]");
+    const shell = ["bash", "pwsh"].includes(event.target.value);
+    row?.querySelectorAll("[data-preparation-shell]").forEach((field) => field.classList.toggle("hidden", !shell));
+  }
 });
 $("#nav").addEventListener("click", (event) => {
   const button = event.target.closest("[data-tab]");
@@ -521,6 +618,21 @@ $("#browse-project").addEventListener("click", () => void action(async () => {
   else if (result.status === "unavailable") $("#inspection").textContent = `${result.diagnostic} Enter the path manually.`;
 }, false));
 $("#execute-cleanup").addEventListener("click", () => void action(executeCleanup, false));
+$("#approve-preparation").addEventListener("click", () => void action(async () => {
+  const pending = state.pendingPreparationAction;
+  if (!pending) throw new Error("No workspace preparation is awaiting approval");
+  $("#preparation-dialog").close();
+  state.pendingPreparationAction = null;
+  await executeTicketAction(pending.request.ticketId, {
+    ...pending.request.body,
+    preparationApproval: {
+      fingerprint: pending.fingerprint,
+      allowNetwork: true,
+      allowInstallScripts: true,
+      rememberForProject: true,
+    },
+  });
+}, false));
 
 async function boot() {
   try {
