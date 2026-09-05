@@ -84,6 +84,28 @@ describe("ProjectCleanupService", () => {
     fixture.manager.close();
   }, 20_000);
 
+  it("preserves a clean worktree that is awaiting preparation approval", async () => {
+    const fixture = await setup();
+    writeFileSync(join(fixture.root, "package.json"), JSON.stringify({ private: true, packageManager: "pnpm@11.19.0" }), "utf8");
+    writeFileSync(join(fixture.root, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n", "utf8");
+    await runner.run("git", ["add", "package.json", "pnpm-lock.yaml"], { cwd: fixture.root });
+    await runner.run("git", [
+      "-c", "user.name=raycoder tests",
+      "-c", "user.email=tests@raycoder.local",
+      "commit", "-m", "test: add node stack",
+    ], { cwd: fixture.root });
+    const runtime = fixture.manager.get(fixture.projectId);
+    runtime.tickets.create({ id: "approval", title: "Approval", description: "preserve preparation" });
+    await runtime.preparation.prepareTicket({ ticketId: "approval", projectRoot: fixture.root, dirtyPolicy: "cancel" }).catch(() => undefined);
+
+    const plan = await fixture.cleanup.plan(fixture.projectId);
+    const target = plan.targets.find((candidate) => candidate.kind === "ticket_worktree" && candidate.ticketId === "approval");
+
+    expect(target).toMatchObject({ dirty: false, requiresForce: true, selectedByDefault: false });
+    expect(plan.warnings).toContainEqual(expect.objectContaining({ code: "preparation.preserved", targetId: target?.id }));
+    fixture.manager.close();
+  }, 20_000);
+
   it("rejects a stale fingerprint after workspace state changes", async () => {
     const fixture = await setup(new FakeAgentAdapter({ failAtTurn: 0 }));
     const runtime = fixture.manager.get(fixture.projectId);

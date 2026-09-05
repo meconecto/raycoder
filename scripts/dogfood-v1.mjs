@@ -31,8 +31,17 @@ try {
   exec("git", ["config", "user.name", "raycoder dogfood"], projectRoot);
   exec("git", ["config", "user.email", "dogfood@raycoder.local"], projectRoot);
   const core = await import(pathToFileURL(join(installedRoot, "node_modules", "raycoder", "dist", "runtime.js")).href);
+  const nativeRunner = new core.NodeProcessRunner();
+  const preparationRunner = {
+    async run(command, args, options) {
+      if (command === "git") return await nativeRunner.run(command, args, options);
+      if (args.includes("--version")) return { command, args, cwd: options.cwd, exitCode: 0, stdout: `${command} dogfood\n`, stderr: "" };
+      return { command, args, cwd: options.cwd, exitCode: 0, stdout: "offline preparation complete\n", stderr: "" };
+    },
+  };
   let runtime = await core.ProjectRuntime.open(projectRoot, {
     adapter: new core.FakeAgentAdapter({ fileName: "dogfood-parent.txt" }),
+    runner: preparationRunner,
   });
   runtime.tickets.create({ id: "dogfood-parent", title: "Dogfood parent", description: "First V1 slice" });
   runtime.tickets.create({
@@ -41,13 +50,14 @@ try {
     description: "Second dependent V1 slice",
     predecessorIds: ["dogfood-parent"],
   });
-  await runtime.scheduler.enqueue("dogfood-parent", { dirtyPolicy: "cancel" });
+  await enqueueWithPreparationApproval(runtime, "dogfood-parent");
   if (runtime.repository.get("dogfood-parent").status !== "DONE") throw new Error("Parent did not reach DONE");
   if (runtime.repository.get("dogfood-child").status !== "READY") throw new Error("Child was not promoted to READY");
   runtime.close();
 
   runtime = await core.ProjectRuntime.open(projectRoot, {
     adapter: new core.FakeAgentAdapter({ fileName: "dogfood-child.txt" }),
+    runner: preparationRunner,
   });
   if (runtime.repository.get("dogfood-child").status !== "READY") throw new Error("READY did not survive restart");
   await runtime.scheduler.enqueue("dogfood-child", { dirtyPolicy: "cancel" });
@@ -58,6 +68,23 @@ try {
 } finally {
   if (succeeded) rmSync(fixtureRoot, { recursive: true, force: true });
   else console.error(`Dogfood fixture preserved for inspection: ${fixtureRoot}`);
+}
+
+async function enqueueWithPreparationApproval(runtime, ticketId) {
+  try {
+    await runtime.scheduler.enqueue(ticketId, { dirtyPolicy: "cancel" });
+  } catch (error) {
+    if (error?.code !== "preparation.approval_required") throw error;
+    await runtime.scheduler.enqueue(ticketId, {
+      dirtyPolicy: "cancel",
+      preparationApproval: {
+        fingerprint: error.details.plan.fingerprint,
+        allowNetwork: true,
+        allowInstallScripts: true,
+        rememberForProject: true,
+      },
+    });
+  }
 }
 
 function exec(command, args, cwd) {

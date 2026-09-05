@@ -6,6 +6,7 @@ import { isPathInside } from "./git-workspace.js";
 import { NodeProcessRunner, ProcessExecutionError, type ProcessRunner } from "./process.js";
 import { NodeProjectVerifier, type ProjectVerifier } from "./project-verifier.js";
 import type { IntegrationAttempt, TicketRepository } from "./ticket-repository.js";
+import { WorkspacePreparationError, type WorkspacePreparationApproval, type WorkspacePreparationService } from "./workspace-preparation.js";
 
 export type IntegrationOutcomeKind = "integrated" | "awaiting_confirmation" | "blocked";
 
@@ -30,25 +31,29 @@ export class IntegrationService {
   readonly #mode: IntegrationMode;
   readonly #runner: ProcessRunner;
   readonly #verifier: ProjectVerifier;
+  readonly #preparation: WorkspacePreparationService | null;
 
   public constructor(
     repository: TicketRepository,
     projectRoot: string,
     mode: IntegrationMode,
-    options: { runner?: ProcessRunner; verifier?: ProjectVerifier } = {},
+    options: { runner?: ProcessRunner; verifier?: ProjectVerifier; preparation?: WorkspacePreparationService } = {},
   ) {
     this.#repository = repository;
     this.#projectRoot = resolve(projectRoot);
     this.#mode = mode;
     this.#runner = options.runner ?? new NodeProcessRunner();
-    this.#verifier = options.verifier ?? new NodeProjectVerifier(this.#runner);
+    this.#verifier = options.verifier ?? new NodeProjectVerifier(this.#runner, {
+      installDependencies: options.preparation === undefined,
+    });
+    this.#preparation = options.preparation ?? null;
   }
 
   public get mode(): IntegrationMode {
     return this.#mode;
   }
 
-  public async prepare(ticketId: string): Promise<IntegrationOutcome> {
+  public async prepare(ticketId: string, preparationApproval?: WorkspacePreparationApproval): Promise<IntegrationOutcome> {
     const ticket = this.#repository.get(ticketId);
     assertIntegrableTicket(ticket);
     const ticketHead = await this.#revParse(ticket.workspace, "HEAD");
@@ -108,6 +113,40 @@ export class IntegrationService {
     }
 
     const targetCommit = await this.#revParse(reconciliationWorkspace, "HEAD");
+    if (this.#preparation !== null) {
+      try {
+        await this.#preparation.prepareTicket({
+          ticketId,
+          projectRoot: this.#projectRoot,
+          dirtyPolicy: "cancel",
+          workspace: reconciliationWorkspace,
+          baseCommit: targetCommit,
+          purpose: "integration",
+          integrationAttemptId: attempt.id,
+          ...(preparationApproval === undefined ? {} : { approval: preparationApproval }),
+        });
+      } catch (error) {
+        if (error instanceof WorkspacePreparationError) {
+          if (error.code === "preparation.cancelled") {
+            const now = new Date().toISOString();
+            this.#repository.updateIntegrationAttempt(attempt.id, {
+              status: "BLOCKED",
+              diagnosticCode: error.code,
+              diagnosticDetail: error.message,
+              completedAt: now,
+            }, now);
+            const current = this.#repository.get(ticketId);
+            if (current.status === "READY_TO_MERGE") {
+              this.#repository.transition(ticketId, "CANCELLED", "workspace_preparation_cancelled", now);
+            }
+            throw error;
+          }
+          this.#block(attempt.id, error.code, error.message);
+          throw error;
+        }
+        throw error;
+      }
+    }
     const verification = await this.#verifier.verify(reconciliationWorkspace);
     this.#repository.updateIntegrationAttempt(attempt.id, {
       targetCommit,
@@ -140,7 +179,7 @@ export class IntegrationService {
     return this.#apply(attemptId);
   }
 
-  public async retry(ticketId: string): Promise<IntegrationOutcome> {
+  public async retry(ticketId: string, preparationApproval?: WorkspacePreparationApproval): Promise<IntegrationOutcome> {
     const ticket = this.#repository.get(ticketId);
     const latest = this.#repository.latestIntegrationAttempt(ticketId);
     if (
@@ -152,7 +191,7 @@ export class IntegrationService {
       throw new Error(`Ticket ${ticketId} is not blocked by an integration attempt`);
     }
     this.#repository.resolveBlocked(ticketId, "integration_retry_requested", "READY_TO_MERGE");
-    return this.prepare(ticketId);
+    return this.prepare(ticketId, preparationApproval);
   }
 
   async #readyOrApply(attemptId: string): Promise<IntegrationOutcome> {

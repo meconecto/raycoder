@@ -5,10 +5,11 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createTicket } from "../src/domain.js";
 import { GitWorkspaceManager } from "../src/git-workspace.js";
 import { GitIntegrationRecoveryEvidence, IntegrationService } from "../src/integration-service.js";
-import { NodeProcessRunner } from "../src/process.js";
+import { NodeProcessRunner, type ProcessResult, type ProcessRunner } from "../src/process.js";
 import type { ProjectVerifier, VerificationResult } from "../src/project-verifier.js";
 import { RecoveryService } from "../src/recovery.js";
 import { TicketRepository } from "../src/ticket-repository.js";
+import { WorkspacePreparationService, type WorkspacePreparationError } from "../src/workspace-preparation.js";
 
 const temporaryDirectories: string[] = [];
 const runner = new NodeProcessRunner();
@@ -203,6 +204,47 @@ describe("IntegrationService", () => {
     expect(retried.ticket.status).toBe("DONE");
     fixture.repository.close();
   });
+
+  it("applies the same preparation approval policy to a moved-base reconciliation worktree", async () => {
+    const fixture = await createFixture({ nodeStack: true });
+    await commitBaseChange(fixture.projectRoot, "base.txt", "advanced\n");
+    const verifier = new StaticVerifier(passedVerification());
+    const preparationRunner = new IntegrationPreparationRunner();
+    const preparation = new WorkspacePreparationService(
+      fixture.repository,
+      new GitWorkspaceManager(preparationRunner),
+      preparationRunner,
+    );
+    const integration = new IntegrationService(fixture.repository, fixture.projectRoot, "auto", {
+      runner: preparationRunner,
+      verifier,
+      preparation,
+    });
+
+    let fingerprint = "";
+    await integration.prepare(fixture.ticketId).catch((error: WorkspacePreparationError) => {
+      expect(error.code).toBe("preparation.approval_required");
+      fingerprint = (error.details as { plan: { fingerprint: string } }).plan.fingerprint;
+    });
+    expect(verifier.calls).toBe(0);
+    expect(fixture.repository.get(fixture.ticketId)).toMatchObject({ status: "BLOCKED", blockedFrom: "READY_TO_MERGE" });
+    expect(fixture.repository.latestWorkspacePreparationAttempt(fixture.ticketId)).toMatchObject({
+      purpose: "integration",
+      status: "AWAITING_APPROVAL",
+    });
+
+    const outcome = await integration.retry(fixture.ticketId, {
+      fingerprint,
+      allowNetwork: true,
+      allowInstallScripts: true,
+      rememberForProject: true,
+    });
+
+    expect(outcome.kind).toBe("integrated");
+    expect(preparationRunner.dependencies).toEqual(["pnpm install --frozen-lockfile"]);
+    expect(verifier.calls).toBe(1);
+    fixture.repository.close();
+  }, 20_000);
 });
 
 class StaticVerifier implements ProjectVerifier {
@@ -217,7 +259,7 @@ class StaticVerifier implements ProjectVerifier {
 }
 
 async function createFixture(
-  options: { ticketFile?: string; ticketContents?: string } = {},
+  options: { ticketFile?: string; ticketContents?: string; nodeStack?: boolean } = {},
 ): Promise<{ projectRoot: string; repository: TicketRepository; ticketId: string; workspace: string }> {
   const projectRoot = mkdtempSync(join(tmpdir(), "raycoder-integration-"));
   temporaryDirectories.push(projectRoot);
@@ -225,7 +267,11 @@ async function createFixture(
   await git(projectRoot, ["config", "user.name", "raycoder tests"]);
   await git(projectRoot, ["config", "user.email", "tests@raycoder.local"]);
   writeFileSync(join(projectRoot, "README.md"), "base\n", "utf8");
-  await git(projectRoot, ["add", "README.md"]);
+  if (options.nodeStack === true) {
+    writeFileSync(join(projectRoot, "package.json"), JSON.stringify({ private: true, packageManager: "pnpm@11.19.0" }), "utf8");
+    writeFileSync(join(projectRoot, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n", "utf8");
+  }
+  await git(projectRoot, ["add", "."]);
   await git(projectRoot, ["commit", "-m", "test: base"]);
 
   const repository = new TicketRepository(":memory:");
@@ -276,4 +322,15 @@ function passedVerification(): VerificationResult {
     diagnosticCode: null,
     diagnosticDetail: null,
   };
+}
+
+class IntegrationPreparationRunner implements ProcessRunner {
+  public readonly dependencies: string[] = [];
+
+  public async run(command: string, args: readonly string[], options: { cwd: string; timeoutMs?: number; signal?: AbortSignal; env?: Readonly<Record<string, string>> }): Promise<ProcessResult> {
+    if (command === "git") return await runner.run(command, args, options);
+    if (args.includes("--version")) return { command, args, cwd: options.cwd, exitCode: 0, stdout: `${command} 11.19.0\n`, stderr: "" };
+    this.dependencies.push([command, ...args].join(" "));
+    return { command, args, cwd: options.cwd, exitCode: 0, stdout: "prepared\n", stderr: "" };
+  }
 }

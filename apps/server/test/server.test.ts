@@ -15,6 +15,8 @@ import {
   ProjectManager,
   ProjectRegistry,
   type PreflightReport,
+  type ProcessResult,
+  type ProcessRunner,
 } from "@raycoder/core";
 import { createRaycoderServer } from "../src/server.js";
 
@@ -256,6 +258,88 @@ describe("minimal server", () => {
     }
   }, 20_000);
 
+  it("requires and remembers a fingerprinted workspace-preparation approval", async () => {
+    const projectRoot = await createRepository();
+    writeFileSync(join(projectRoot, "package.json"), JSON.stringify({ private: true, packageManager: "pnpm@1.0.0" }), "utf8");
+    writeFileSync(join(projectRoot, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n", "utf8");
+    await runner.run("git", ["add", "package.json", "pnpm-lock.yaml"], { cwd: projectRoot });
+    await runner.run("git", ["commit", "-m", "test: node project"], { cwd: projectRoot });
+    const registryRoot = mkdtempSync(join(tmpdir(), "raycoder-preparation-api-"));
+    temporaryDirectories.push(registryRoot);
+    const preparationRunner = new ApiPreparationRunner();
+    const projects = new ProjectManager(
+      new ProjectRegistry(join(registryRoot, "projects.db")),
+      () => ({ adapter: new FakeAgentAdapter(), runner: preparationRunner }),
+    );
+    const runtime = await projects.register(projectRoot);
+    const projectId = projects.list()[0]?.project.id;
+    if (projectId === undefined) throw new Error("Expected registered project");
+    runtime.tickets.create({ id: "prepared", title: "Prepared", description: "test" });
+    const server = createRaycoderServer({ projects, preflight: executablePreflight() });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as AddressInfo).port;
+    const root = `http://127.0.0.1:${port}/api/projects/${projectId}`;
+    try {
+      const first = await fetch(`${root}/tickets/prepared/actions`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "run", dirtyPolicy: "cancel" }),
+      });
+      expect(first.status).toBe(409);
+      const required = await first.json() as { code: string; details: { plan: { fingerprint: string } } };
+      expect(required.code).toBe("preparation.approval_required");
+      expect(runtime.repository.get("prepared").status).toBe("READY");
+
+      const stale = await fetch(`${root}/tickets/prepared/actions`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          action: "run", dirtyPolicy: "cancel",
+          preparationApproval: {
+            fingerprint: "0".repeat(64), allowNetwork: true, allowInstallScripts: true, rememberForProject: true,
+          },
+        }),
+      });
+      expect(stale.status).toBe(409);
+      expect(await stale.json()).toMatchObject({ code: "preparation.plan_changed", details: { plan: { fingerprint: required.details.plan.fingerprint } } });
+
+      const foreignConfig = await fetch(`${root}/preparation/config`, {
+        method: "PUT",
+        headers: { "content-type": "application/json", origin: "http://evil.example" },
+        body: JSON.stringify({ mode: "auto" }),
+      });
+      expect(foreignConfig.status).toBe(403);
+      expect(await foreignConfig.json()).toMatchObject({ code: "request.invalid_origin" });
+
+      const approved = await fetch(`${root}/tickets/prepared/actions`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          action: "run", dirtyPolicy: "cancel",
+          preparationApproval: {
+            fingerprint: required.details.plan.fingerprint,
+            allowNetwork: true,
+            allowInstallScripts: true,
+            rememberForProject: true,
+          },
+        }),
+      });
+      expect(approved.status).toBe(202);
+      expect(runtime.repository.get("prepared").status).toBe("DONE");
+      expect(preparationRunner.preparations).toEqual(["pnpm install --frozen-lockfile"]);
+      const snapshot = await fetch(`${root}/preparation`).then((response) => response.json()) as {
+        approval: { fingerprint: string }; attempts: { status: string }[];
+      };
+      expect(snapshot.approval.fingerprint).toBe(required.details.plan.fingerprint);
+      expect(snapshot.attempts.map((attempt) => attempt.status)).toEqual(["AWAITING_APPROVAL", "PREPARED"]);
+      expect(await fetch(`${root}/tickets/prepared/preparation`).then((response) => response.json()))
+        .toMatchObject({ attempts: [{ status: "AWAITING_APPROVAL" }, { status: "PREPARED" }] });
+      const revoked = await fetch(`${root}/preparation/approval`, { method: "DELETE" });
+      expect(revoked.status).toBe(200);
+      expect(runtime.preparation.approval()).toBeNull();
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error === undefined ? resolve() : reject(error)));
+      projects.close();
+    }
+  }, 20_000);
+
   it("runs conversational planning asynchronously through durable project APIs", async () => {
     const projectRoot = await createRepository();
     const registryRoot = mkdtempSync(join(tmpdir(), "raycoder-planning-api-"));
@@ -477,5 +561,28 @@ async function waitFor(predicate: () => boolean, timeoutMs = 5_000): Promise<voi
   while (!predicate()) {
     if (Date.now() - started > timeoutMs) throw new Error("Timed out waiting for server dispatch");
     await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+}
+
+function executablePreflight(): PreflightReport {
+  return {
+    canServe: true,
+    canExecute: true,
+    canStart: true,
+    essential: [{ name: "node", ok: true, message: "Node test" }],
+    tools: [{ name: "git", ok: true, message: "Git test" }],
+    providers: [{ provider: "fake", executable: true, diagnostics: [] }],
+    upcoming: [],
+  };
+}
+
+class ApiPreparationRunner implements ProcessRunner {
+  public readonly preparations: string[] = [];
+
+  public async run(command: string, args: readonly string[], options: { cwd: string; timeoutMs?: number; signal?: AbortSignal; env?: Readonly<Record<string, string>> }): Promise<ProcessResult> {
+    if (command === "git") return await runner.run(command, args, options);
+    if (args.includes("--version")) return { command, args, cwd: options.cwd, exitCode: 0, stdout: `${command} 1.0.0\n`, stderr: "" };
+    this.preparations.push([command, ...args].join(" "));
+    return { command, args, cwd: options.cwd, exitCode: 0, stdout: "prepared\n", stderr: "" };
   }
 }

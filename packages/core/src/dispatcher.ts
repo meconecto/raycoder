@@ -11,6 +11,7 @@ export interface DispatchRequest {
   readonly dirtyPolicy: DirtyWorkspacePolicy;
   readonly model?: string;
   readonly effort?: string;
+  readonly preparationSummary?: string;
 }
 
 interface ActiveDispatch {
@@ -136,7 +137,7 @@ export class Dispatcher {
     try {
       const implementation = await this.#runStage(
         session,
-        implementationPrompt(ticket),
+        implementationPrompt(ticket, request.preparationSummary),
         persistedSessionId,
         0,
       );
@@ -301,10 +302,11 @@ export class Dispatcher {
   }
 }
 
-function implementationPrompt(ticket: Ticket): string {
+function implementationPrompt(ticket: Ticket, preparationSummary?: string): string {
   return [
     "Implement this ticket in the current isolated Git workspace.",
     "Keep all writes inside the workspace. Verify the change and create at least one descriptive Git commit before finishing.",
+    ...(preparationSummary === undefined ? [] : [`Workspace preparation completed before this session: ${preparationSummary}`]),
     `Title: ${ticket.title}`,
     `Description: ${ticket.description}`,
   ].join("\n\n");

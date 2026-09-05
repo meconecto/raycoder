@@ -57,6 +57,7 @@ jobs:
       - run: pnpm installer:smoke
       - run: pnpm dogfood:v1
       - run: pnpm dogfood:rc4
+      - run: pnpm dogfood:preparation
 
   browser-e2e:
     runs-on: ubuntu-latest

@@ -1,4 +1,4 @@
-# raycoder — brief v19 (instalación user-local actualizable)
+# raycoder — brief v20 (preparación durable de workspaces)
 
 ## Qué es esto
 
@@ -121,6 +121,29 @@ raycoder **no modifica automáticamente archivos versionados del proyecto ni ree
 Concretamente: `.raycoder/` se excluye mediante mecanismos **locales no versionados** (`.git/info/exclude` cuando el proyecto es un repo Git) — **raycoder nunca edita el `.gitignore` del usuario**.
 
 El servidor acepta solamente assets estáticos allowlisteados. Las mutaciones validan `Host` y, cuando está presente, `Origin`; CLI y tests locales sin `Origin` siguen habilitados. Los errores HTTP usan `{ error, code, details? }`.
+
+## Preparación del workspace
+
+Antes de iniciar el agente de implementación, raycoder prepara las dependencias dentro del
+workspace aislado del ticket. La preparación es durable, pertenece al core y pasa por el
+`Scheduler` del proyecto; el ticket no entra en `RUNNING` hasta que termina exitosamente.
+
+La primera preparación ejecutable de un proyecto requiere aprobación explícita. La UI muestra
+las unidades, comandos, posibilidad de red y ejecución de scripts de instalación. La aprobación
+se recuerda sólo para el proyecto y para un fingerprint que incluye estrategia, plataforma,
+herramientas, manifests, lockfiles y scripts. Un cambio de identidad invalida la aprobación.
+
+Se incluyen estrategias reproducibles para Node (pnpm, npm, Yarn y Bun), Python (uv, Poetry y
+Pipenv), Rust/Cargo y Go modules. La autodetección sólo decide cuando hay una estrategia
+inequívoca en la raíz. Monorepos, repos mixtos y preparaciones Bash/PowerShell usan una lista
+ordenada configurada explícitamente; los scripts deben estar versionados y dentro del repo, y se
+ejecutan sin interpolación de shell. Un stack desconocido continúa con preparación no aplicable;
+un stack reconocido pero ambiguo o sin lock válido se bloquea con diagnóstico.
+
+Una preparación fallida o interrumpida preserva workspace, comandos, salida sanitizada y
+diagnóstico. Nunca se borran workspaces fallidos ni se toma SQLite como prueba de vida de un
+proceso. La preparación tampoco puede modificar archivos versionados: cualquier cambio aborta y
+bloquea el ticket para inspección.
 
 ## Política de verificación y TDD
 
@@ -342,6 +365,11 @@ Configurable: autorrevisión o revisor independiente. Nivel: global y por proyec
 
 Varios proyectos pueden tener agentes trabajando en simultáneo. Dentro de cada proyecto, el dispatcher es secuencial (un ticket a la vez).
 
+La ejecución manual por ticket es el default. Un modo Auto opt-in queda previsto para una etapa
+posterior: ejecutará secuencialmente tickets `READY` y se pausará ante aprobaciones pendientes,
+bloqueos, fallos o cualquier intervención humana. Auto nunca será el comportamiento implícito al
+confirmar un DAG.
+
 ## Motor de agentes: adaptadores por proveedor
 
 La primera integración usa el SDK TypeScript oficial de Codex. El adapter traduce sus sesiones y eventos al contrato normalizado de raycoder y fija el workspace aislado del ticket como raíz de trabajo, con el mínimo permiso de escritura necesario. Si una necesidad futura exige que raycoder gestione directamente autenticación, historial, aprobaciones u otros eventos ricos, el adapter puede evolucionar internamente hacia Codex App Server sin cambiar el contrato del core.
@@ -364,12 +392,13 @@ Los proveedores siguientes usan un SDK oficial cuando exista y cubra el contrato
 - Contador de uso en vivo por proveedor.
 - Aislamiento a nivel de sistema operativo.
 - Nuevos adapters de proveedor.
+- Controles y ejecución del modo Auto (deseado como opt-in en una etapa posterior).
 
 ---
 
 ## Estado del brief
 
-**Decisiones de producto pendientes: ninguna.**
+**Decisiones de producto pendientes: ninguna para esta etapa.**
 
 **Invariantes técnicas pendientes de definición: ninguna conocida.**
 

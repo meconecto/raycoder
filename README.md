@@ -57,8 +57,28 @@ pnpm package:npx-smoke
 pnpm installer:smoke
 pnpm dogfood:v1
 pnpm dogfood:rc4
+pnpm dogfood:preparation
 pnpm dev -- /path/to/a/git/repository
 ```
+
+## Workspace preparation
+
+Before an agent starts, raycoder prepares that ticket's isolated worktree. A single,
+unambiguous root stack is detected automatically (Node lockfiles, uv, Poetry, Pipenv, Cargo,
+or Go); mixed repositories use ordered units configured in Settings. Explicit Bash and
+PowerShell steps must be tracked files inside the repository, and arguments are passed
+literally without shell interpolation.
+
+The first run shows the exact units, commands, paths, tool versions, possible network use,
+and install-script risk. Approval is stored only for that project and fingerprint. Changes to
+the strategy, unit order, platform, executable/version, manifests, locks, scripts, or script
+policy require approval again. Failed or interrupted preparation is durable, blocks the ticket
+without deleting its worktree, and can be inspected and retried. Unknown stacks continue with
+`NOT_APPLICABLE`; recognizable stacks without a valid lock are blocked with a diagnostic.
+
+Manual **Run** per ticket remains the default. A sequential Auto mode is an explicit future
+follow-up: it will be opt-in and pause for approvals, blockers, failures, or human intervention.
+No Auto controls are enabled in this release.
 
 Integration is automatic by default. To require approval before changing a base branch:
 
@@ -92,6 +112,8 @@ Projects are inspected before mutation, catalogued globally and opened as indepe
 `/api/projects/:projectId/` and exposes tickets, dependencies, history, provider sessions,
 capabilities and lifecycle actions. Planning generation creates a durable session and returns
 HTTP 202; clients poll the planning snapshot for persisted events, completion or errors.
+Workspace preparation is exposed through project configuration/approval endpoints and a
+per-ticket durable attempt history; ticket actions accept a fingerprinted approval when needed.
 Mutations are serialized per project; different projects
 can run concurrently. The legacy single-project diagnostic endpoints remain available for
 the initial screen.
