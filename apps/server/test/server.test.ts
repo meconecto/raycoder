@@ -148,7 +148,7 @@ describe("minimal server", () => {
     temporaryDirectories.push(registryRoot);
     const projects = new ProjectManager(
       new ProjectRegistry(join(registryRoot, "projects.db")),
-      () => ({ adapter: new FakeAgentAdapter() }),
+      () => ({ adapter: new FakeAgentAdapter(), workspaceVerification: false }),
     );
     const runtime = await projects.register(projectRoot);
     const project = projects.list()[0]?.project;
@@ -270,7 +270,7 @@ describe("minimal server", () => {
     const preparationRunner = new ApiPreparationRunner();
     const projects = new ProjectManager(
       new ProjectRegistry(join(registryRoot, "projects.db")),
-      () => ({ adapter: new FakeAgentAdapter(), runner: preparationRunner }),
+      () => ({ adapter: new FakeAgentAdapter(), runner: preparationRunner, workspaceVerification: false }),
     );
     const runtime = await projects.register(projectRoot);
     const projectId = projects.list()[0]?.project.id;
@@ -341,13 +341,111 @@ describe("minimal server", () => {
     }
   }, 20_000);
 
+  it("requires a fresh verification approval before starting the adapter and exposes durable attempts", async () => {
+    const projectRoot = await createRepository();
+    writeFileSync(join(projectRoot, "package.json"), JSON.stringify({
+      private: true,
+      packageManager: "pnpm@1.0.0",
+      scripts: { verify: "fixture" },
+    }), "utf8");
+    writeFileSync(join(projectRoot, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n", "utf8");
+    await runner.run("git", ["add", "package.json", "pnpm-lock.yaml"], { cwd: projectRoot });
+    await runner.run("git", ["commit", "-m", "test: verifiable node project"], { cwd: projectRoot });
+    const registryRoot = mkdtempSync(join(tmpdir(), "raycoder-verification-api-"));
+    temporaryDirectories.push(registryRoot);
+    const workspaceRunner = new ApiPreparationRunner();
+    const projects = new ProjectManager(
+      new ProjectRegistry(join(registryRoot, "projects.db")),
+      () => ({ adapter: new FakeAgentAdapter(), runner: workspaceRunner }),
+    );
+    const runtime = await projects.register(projectRoot);
+    const projectId = projects.list()[0]?.project.id;
+    if (projectId === undefined) throw new Error("Expected registered project");
+    runtime.tickets.create({ id: "verified-api", title: "Verified", description: "gate adapter" });
+    const server = createRaycoderServer({ projects, preflight: executablePreflight() });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as AddressInfo).port;
+    const root = `http://127.0.0.1:${port}/api/projects/${projectId}`;
+    try {
+      const preparationResponse = await fetch(`${root}/tickets/verified-api/actions`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "run", dirtyPolicy: "cancel" }),
+      });
+      const preparationRequired = await preparationResponse.json() as { details: { plan: { fingerprint: string } } };
+
+      const verificationResponse = await fetch(`${root}/tickets/verified-api/actions`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          action: "run", dirtyPolicy: "cancel",
+          preparationApproval: {
+            fingerprint: preparationRequired.details.plan.fingerprint,
+            allowNetwork: true, allowInstallScripts: true, rememberForProject: true,
+          },
+        }),
+      });
+      expect(verificationResponse.status).toBe(409);
+      const verificationRequired = await verificationResponse.json() as { code: string; details: { plan: { fingerprint: string } } };
+      expect(verificationRequired.code).toBe("verification.approval_required");
+      expect(runtime.repository.get("verified-api").status).toBe("READY");
+      expect(runtime.repository.listAgentSessions("verified-api")).toEqual([]);
+
+      const stale = await fetch(`${root}/tickets/verified-api/actions`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          action: "run", dirtyPolicy: "cancel",
+          verificationApproval: { fingerprint: "0".repeat(64), allowVerification: true, rememberForProject: true },
+        }),
+      });
+      expect(stale.status).toBe(409);
+      expect(await stale.json()).toMatchObject({
+        code: "verification.plan_changed",
+        details: { plan: { fingerprint: verificationRequired.details.plan.fingerprint } },
+      });
+
+      const foreignConfig = await fetch(`${root}/verification/config`, {
+        method: "PUT",
+        headers: { "content-type": "application/json", origin: "http://evil.example" },
+        body: JSON.stringify({ mode: "auto" }),
+      });
+      expect(foreignConfig.status).toBe(403);
+      expect(await foreignConfig.json()).toMatchObject({ code: "request.invalid_origin" });
+
+      const approved = await fetch(`${root}/tickets/verified-api/actions`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          action: "run", dirtyPolicy: "cancel",
+          verificationApproval: {
+            fingerprint: verificationRequired.details.plan.fingerprint,
+            allowVerification: true,
+            rememberForProject: true,
+          },
+        }),
+      });
+      expect(approved.status).toBe(202);
+      expect(runtime.repository.get("verified-api").status).toBe("DONE");
+      expect(workspaceRunner.preparations).toEqual(["pnpm install --frozen-lockfile", "pnpm run verify"]);
+      expect(await fetch(`${root}/verification`).then((response) => response.json())).toMatchObject({
+        approval: { fingerprint: verificationRequired.details.plan.fingerprint },
+        attempts: expect.arrayContaining([expect.objectContaining({ status: "PASSED" })]),
+      });
+      expect(await fetch(`${root}/tickets/verified-api/verification`).then((response) => response.json())).toMatchObject({
+        attempts: expect.arrayContaining([expect.objectContaining({ status: "PASSED" })]),
+      });
+      expect((await fetch(`${root}/verification/approval`, { method: "DELETE" })).status).toBe(200);
+      expect(runtime.verification.approval()).toBeNull();
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error === undefined ? resolve() : reject(error)));
+      projects.close();
+    }
+  }, 20_000);
+
   it("runs conversational planning asynchronously through durable project APIs", async () => {
     const projectRoot = await createRepository();
     const registryRoot = mkdtempSync(join(tmpdir(), "raycoder-planning-api-"));
     temporaryDirectories.push(registryRoot);
     const projects = new ProjectManager(
       new ProjectRegistry(join(registryRoot, "projects.db")),
-      () => ({ adapter: new FakeAgentAdapter() }),
+      () => ({ adapter: new FakeAgentAdapter(), workspaceVerification: false }),
     );
     const runtime = await projects.register(projectRoot);
     const projectId = projects.list()[0]?.project.id;
@@ -523,7 +621,7 @@ describe("minimal server", () => {
     });
     const projects = new ProjectManager(
       new ProjectRegistry(join(registryRoot, "projects.db")),
-      () => ({ adapter: new FakeAgentAdapter(), globalConfigStore: config }),
+      () => ({ adapter: new FakeAgentAdapter(), globalConfigStore: config, workspaceVerification: false }),
     );
     const runtime = await projects.register(projectRoot);
     const projectId = projects.list()[0]?.project.id;
@@ -583,7 +681,7 @@ describe("minimal server", () => {
     temporaryDirectories.push(registryRoot);
     const projects = new ProjectManager(
       new ProjectRegistry(join(registryRoot, "projects.db")),
-      () => ({ adapter: new FakeAgentAdapter() }),
+      () => ({ adapter: new FakeAgentAdapter(), workspaceVerification: false }),
     );
     const runtime = await projects.register(projectRoot);
     const projectId = projects.list()[0]?.project.id;

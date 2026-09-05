@@ -71,20 +71,33 @@ try {
 }
 
 async function enqueueWithPreparationApproval(runtime, ticketId) {
-  try {
-    await runtime.scheduler.enqueue(ticketId, { dirtyPolicy: "cancel" });
-  } catch (error) {
-    if (error?.code !== "preparation.approval_required") throw error;
-    await runtime.scheduler.enqueue(ticketId, {
-      dirtyPolicy: "cancel",
-      preparationApproval: {
-        fingerprint: error.details.plan.fingerprint,
-        allowNetwork: true,
-        allowInstallScripts: true,
-        rememberForProject: true,
-      },
-    });
+  const approvals = {};
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      await runtime.scheduler.enqueue(ticketId, { dirtyPolicy: "cancel", ...approvals });
+      return;
+    } catch (error) {
+      if (error?.code === "preparation.approval_required") {
+        approvals.preparationApproval = {
+          fingerprint: error.details.plan.fingerprint,
+          allowNetwork: true,
+          allowInstallScripts: true,
+          rememberForProject: true,
+        };
+        continue;
+      }
+      if (error?.code === "verification.approval_required") {
+        approvals.verificationApproval = {
+          fingerprint: error.details.plan.fingerprint,
+          allowVerification: true,
+          rememberForProject: true,
+        };
+        continue;
+      }
+      throw error;
+    }
   }
+  throw new Error(`Workspace approvals did not converge for ${ticketId}`);
 }
 
 function exec(command, args, cwd) {

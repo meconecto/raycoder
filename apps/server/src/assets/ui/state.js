@@ -13,8 +13,9 @@ export const state = {
   planning: null,
   capabilities: null,
   preparation: null,
+  verification: null,
   activity: { items: [], nextCursor: null, summary: { count: 0 } },
   preferences: { locale: "auto", theme: "system" },
-  pendingPreparationAction: null,
+  pendingWorkspaceAction: null,
   notice: null,
 };

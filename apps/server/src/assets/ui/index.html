@@ -66,13 +66,13 @@
     </form>
   </dialog>
 
-  <dialog id="preparation-dialog">
-    <form method="dialog" class="stack" id="preparation-form">
-      <div><p class="kicker">Workspace preparation</p><h2>Allow reproducible setup?</h2></div>
-      <p>This runs the listed commands with your local raycoder permissions. They may use the network and execute dependency or project install scripts.</p>
-      <div id="preparation-commands" class="target-list"></div>
-      <small id="preparation-fingerprint" class="muted"></small>
-      <div class="actions"><button value="cancel" formnovalidate>Cancel</button><button type="button" id="approve-preparation" class="primary">Approve for this project</button></div>
+  <dialog id="workspace-approval-dialog">
+    <form method="dialog" class="stack" id="workspace-approval-form">
+      <div><p class="kicker">Workspace operation</p><h2 id="workspace-approval-title">Allow reproducible commands?</h2></div>
+      <p id="workspace-approval-description">Review every command below. It runs with your local raycoder permissions.</p>
+      <div id="workspace-approval-commands" class="target-list"></div>
+      <small id="workspace-approval-fingerprint" class="muted"></small>
+      <div class="actions"><button value="cancel" formnovalidate>Cancel</button><button type="button" id="approve-workspace" class="primary">Approve for this project</button></div>
     </form>
   </dialog>
 

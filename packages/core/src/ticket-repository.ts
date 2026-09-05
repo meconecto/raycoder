@@ -88,6 +88,39 @@ interface WorkspacePreparationAttemptRow {
   completed_at: string | null;
 }
 
+export type WorkspaceVerificationPurpose = "dispatch" | "integration";
+export type WorkspaceVerificationStatus =
+  | "AWAITING_APPROVAL"
+  | "QUEUED"
+  | "VERIFYING"
+  | "PASSED"
+  | "FAILED"
+  | "UNAVAILABLE"
+  | "CANCELLED"
+  | "INTERRUPTED";
+
+interface WorkspaceVerificationAttemptRow {
+  id: string;
+  ticket_id: string;
+  integration_attempt_id: string | null;
+  purpose: WorkspaceVerificationPurpose;
+  status: WorkspaceVerificationStatus;
+  strategy: string;
+  fingerprint: string;
+  plan_json: string;
+  approval_json: string | null;
+  workspace: string;
+  target_commit: string;
+  resumed_from_attempt_id: string | null;
+  process_json: string | null;
+  output: string | null;
+  diagnostic_code: string | null;
+  diagnostic_detail: string | null;
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
+}
+
 export interface TicketHistoryEntry {
   readonly id: number;
   readonly ticketId: string;
@@ -333,6 +366,44 @@ export interface CreateWorkspacePreparationAttempt {
   readonly approval?: unknown | null;
   readonly workspace: string;
   readonly baseCommit: string;
+  readonly resumedFromAttemptId?: string | null;
+  readonly now?: string;
+}
+
+export interface WorkspaceVerificationAttempt {
+  readonly id: string;
+  readonly ticketId: string;
+  readonly integrationAttemptId: string | null;
+  readonly purpose: WorkspaceVerificationPurpose;
+  readonly status: WorkspaceVerificationStatus;
+  readonly strategy: string;
+  readonly fingerprint: string;
+  readonly plan: unknown;
+  readonly approval: unknown | null;
+  readonly workspace: string;
+  readonly targetCommit: string;
+  readonly resumedFromAttemptId: string | null;
+  readonly process: unknown | null;
+  readonly output: string | null;
+  readonly diagnosticCode: string | null;
+  readonly diagnosticDetail: string | null;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly completedAt: string | null;
+}
+
+export interface CreateWorkspaceVerificationAttempt {
+  readonly id: string;
+  readonly ticketId: string;
+  readonly integrationAttemptId?: string | null;
+  readonly purpose: WorkspaceVerificationPurpose;
+  readonly status: WorkspaceVerificationStatus;
+  readonly strategy: string;
+  readonly fingerprint: string;
+  readonly plan: unknown;
+  readonly approval?: unknown | null;
+  readonly workspace: string;
+  readonly targetCommit: string;
   readonly resumedFromAttemptId?: string | null;
   readonly now?: string;
 }
@@ -1135,6 +1206,121 @@ export class TicketRepository {
     return uncertain.map((attempt) => this.getWorkspacePreparationAttempt(attempt.id));
   }
 
+  public createWorkspaceVerificationAttempt(input: CreateWorkspaceVerificationAttempt): WorkspaceVerificationAttempt {
+    this.get(input.ticketId);
+    const now = input.now ?? new Date().toISOString();
+    this.#database.prepare(`INSERT INTO workspace_verification_attempts (
+      id, ticket_id, integration_attempt_id, purpose, status, strategy, fingerprint, plan_json,
+      approval_json, workspace, target_commit, resumed_from_attempt_id, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      input.id,
+      input.ticketId,
+      input.integrationAttemptId ?? null,
+      input.purpose,
+      input.status,
+      input.strategy,
+      input.fingerprint,
+      JSON.stringify(input.plan),
+      input.approval === undefined || input.approval === null ? null : JSON.stringify(input.approval),
+      input.workspace,
+      input.targetCommit,
+      input.resumedFromAttemptId ?? null,
+      now,
+      now,
+    );
+    return this.getWorkspaceVerificationAttempt(input.id);
+  }
+
+  public getWorkspaceVerificationAttempt(id: string): WorkspaceVerificationAttempt {
+    const row = this.#database.prepare("SELECT * FROM workspace_verification_attempts WHERE id = ?")
+      .get(id) as WorkspaceVerificationAttemptRow | undefined;
+    if (row === undefined) throw new Error(`Unknown workspace verification attempt: ${id}`);
+    return workspaceVerificationAttemptFromRow(row);
+  }
+
+  public listWorkspaceVerificationAttempts(ticketId?: string): WorkspaceVerificationAttempt[] {
+    const rows = ticketId === undefined
+      ? this.#database.prepare("SELECT * FROM workspace_verification_attempts ORDER BY created_at, rowid").all()
+      : this.#database.prepare(
+          "SELECT * FROM workspace_verification_attempts WHERE ticket_id = ? ORDER BY created_at, rowid",
+        ).all(ticketId);
+    return (rows as WorkspaceVerificationAttemptRow[]).map(workspaceVerificationAttemptFromRow);
+  }
+
+  public latestWorkspaceVerificationAttempt(
+    ticketId: string,
+    purpose?: WorkspaceVerificationPurpose,
+  ): WorkspaceVerificationAttempt | null {
+    const row = purpose === undefined
+      ? this.#database.prepare(
+          "SELECT * FROM workspace_verification_attempts WHERE ticket_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1",
+        ).get(ticketId)
+      : this.#database.prepare(
+          "SELECT * FROM workspace_verification_attempts WHERE ticket_id = ? AND purpose = ? ORDER BY created_at DESC, rowid DESC LIMIT 1",
+        ).get(ticketId, purpose);
+    return row === undefined ? null : workspaceVerificationAttemptFromRow(row as WorkspaceVerificationAttemptRow);
+  }
+
+  public updateWorkspaceVerificationAttempt(
+    id: string,
+    patch: {
+      status?: WorkspaceVerificationStatus;
+      approval?: unknown | null;
+      process?: unknown | null;
+      output?: string | null;
+      diagnosticCode?: string | null;
+      diagnosticDetail?: string | null;
+      completedAt?: string | null;
+    },
+    now = new Date().toISOString(),
+  ): WorkspaceVerificationAttempt {
+    const current = this.getWorkspaceVerificationAttempt(id);
+    const value = <T>(next: T | undefined, previous: T): T => next === undefined ? previous : next;
+    const approval = value(patch.approval, current.approval);
+    const process = value(patch.process, current.process);
+    this.#database.prepare(`UPDATE workspace_verification_attempts SET status = ?, approval_json = ?,
+      process_json = ?, output = ?, diagnostic_code = ?, diagnostic_detail = ?, updated_at = ?,
+      completed_at = ? WHERE id = ?`).run(
+        patch.status ?? current.status,
+        approval === null ? null : JSON.stringify(approval),
+        process === null ? null : JSON.stringify(process),
+        value(patch.output, current.output),
+        value(patch.diagnosticCode, current.diagnosticCode),
+        value(patch.diagnosticDetail, current.diagnosticDetail),
+        now,
+        value(patch.completedAt, current.completedAt),
+        id,
+      );
+    return this.getWorkspaceVerificationAttempt(id);
+  }
+
+  public interruptWorkspaceVerifications(now = new Date().toISOString()): WorkspaceVerificationAttempt[] {
+    const uncertain = this.listWorkspaceVerificationAttempts().filter(
+      (attempt) => attempt.status === "QUEUED" || attempt.status === "VERIFYING",
+    );
+    const transaction = this.#database.transaction(() => {
+      for (const attempt of uncertain) {
+        this.#database.prepare(`UPDATE workspace_verification_attempts SET status = 'INTERRUPTED',
+          diagnostic_code = ?, diagnostic_detail = ?, updated_at = ?, completed_at = ? WHERE id = ?`).run(
+            "verification.bootstrap_interrupted",
+            "raycoder restarted before workspace verification reached a durable terminal state.",
+            now,
+            now,
+            attempt.id,
+          );
+        const ticket = this.get(attempt.ticketId);
+        if (["READY", "RUNNING", "REVIEW", "READY_TO_MERGE"].includes(ticket.status)) {
+          const blocked = blockTicket(ticket, now);
+          this.#database.prepare("UPDATE tickets SET status = ?, blocked_from = ?, updated_at = ? WHERE id = ?")
+            .run(blocked.status, blocked.blockedFrom, blocked.updatedAt, blocked.id);
+          this.#recordHistory(ticket.id, ticket.status, "BLOCKED", "workspace_verification_interrupted", now);
+        }
+      }
+    });
+    transaction();
+    return uncertain.map((attempt) => this.getWorkspaceVerificationAttempt(attempt.id));
+  }
+
   public setProjectSetting(key: string, value: unknown, now = new Date().toISOString()): void {
     this.#database.prepare(`INSERT INTO project_settings (key, value_json, updated_at) VALUES (?, ?, ?)
       ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at`)
@@ -1420,6 +1606,30 @@ function workspacePreparationAttemptFromRow(row: WorkspacePreparationAttemptRow)
     approval: row.approval_json === null ? null : JSON.parse(row.approval_json) as unknown,
     workspace: row.workspace,
     baseCommit: row.base_commit,
+    resumedFromAttemptId: row.resumed_from_attempt_id,
+    process: row.process_json === null ? null : JSON.parse(row.process_json) as unknown,
+    output: row.output,
+    diagnosticCode: row.diagnostic_code,
+    diagnosticDetail: row.diagnostic_detail,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    completedAt: row.completed_at,
+  };
+}
+
+function workspaceVerificationAttemptFromRow(row: WorkspaceVerificationAttemptRow): WorkspaceVerificationAttempt {
+  return {
+    id: row.id,
+    ticketId: row.ticket_id,
+    integrationAttemptId: row.integration_attempt_id,
+    purpose: row.purpose,
+    status: row.status,
+    strategy: row.strategy,
+    fingerprint: row.fingerprint,
+    plan: JSON.parse(row.plan_json) as unknown,
+    approval: row.approval_json === null ? null : JSON.parse(row.approval_json) as unknown,
+    workspace: row.workspace,
+    targetCommit: row.target_commit,
     resumedFromAttemptId: row.resumed_from_attempt_id,
     process: row.process_json === null ? null : JSON.parse(row.process_json) as unknown,
     output: row.output,

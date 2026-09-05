@@ -2,12 +2,14 @@ import type { DirtyWorkspacePolicy } from "./git-workspace.js";
 import type { ProjectOperationResult, ProjectOrchestrator } from "./project-orchestrator.js";
 import type { TicketRepository } from "./ticket-repository.js";
 import type { WorkspacePreparationApproval } from "./workspace-preparation.js";
+import type { WorkspaceVerificationApproval } from "./workspace-verification.js";
 
 export interface SchedulerRunOptions {
   readonly dirtyPolicy: DirtyWorkspacePolicy;
   readonly model?: string;
   readonly effort?: string;
   readonly preparationApproval?: WorkspacePreparationApproval;
+  readonly verificationApproval?: WorkspaceVerificationApproval;
 }
 
 export class Scheduler {
@@ -48,6 +50,7 @@ export class Scheduler {
           ...(options.model === undefined ? {} : { model: options.model }),
           ...(options.effort === undefined ? {} : { effort: options.effort }),
           ...(options.preparationApproval === undefined ? {} : { preparationApproval: options.preparationApproval }),
+          ...(options.verificationApproval === undefined ? {} : { verificationApproval: options.verificationApproval }),
         });
       } finally {
         this.#activeTicketId = null;

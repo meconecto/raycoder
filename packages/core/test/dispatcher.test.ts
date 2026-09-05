@@ -7,8 +7,9 @@ import { createTicket } from "../src/domain.js";
 import { Dispatcher } from "../src/dispatcher.js";
 import { FakeAgentAdapter } from "../src/fake-agent-adapter.js";
 import { GitWorkspaceManager } from "../src/git-workspace.js";
-import { NodeProcessRunner } from "../src/process.js";
+import { NodeProcessRunner, type ProcessResult, type ProcessRunner } from "../src/process.js";
 import { TicketRepository } from "../src/ticket-repository.js";
+import { WorkspaceVerificationService } from "../src/workspace-verification.js";
 
 const temporaryDirectories: string[] = [];
 const runner = new NodeProcessRunner();
@@ -149,4 +150,45 @@ describe("Dispatcher with deterministic adapter", () => {
     expect(repository.reviewDecisions("self-review")[0]?.verdict).toBe("approved");
     repository.close();
   });
+
+  it("does not start the adapter before verification authorization and verifies before review", async () => {
+    const projectRoot = await createRepository();
+    writeFileSync(join(projectRoot, "package.json"), JSON.stringify({ scripts: { verify: "fixture" } }), "utf8");
+    writeFileSync(join(projectRoot, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n", "utf8");
+    await runner.run("git", ["add", "package.json", "pnpm-lock.yaml"], { cwd: projectRoot });
+    await runner.run("git", ["commit", "-m", "test: verification convention"], { cwd: projectRoot });
+    const repository = new TicketRepository(":memory:");
+    repository.create(createTicket({ id: "verified", title: "Verified", description: "gate review", baseBranch: "main", hasPredecessors: false }));
+    const adapter = new RecordingAdapter();
+    const verificationRunner = new DeterministicVerificationRunner();
+    const verification = new WorkspaceVerificationService(repository, verificationRunner);
+    const dispatcher = new Dispatcher(repository, new GitWorkspaceManager(), adapter, adapter, "independent", verification);
+
+    await expect(dispatcher.dispatch({ ticketId: "verified", projectRoot, dirtyPolicy: "cancel" }))
+      .rejects.toMatchObject({ code: "verification.approval_required" });
+    expect(adapter.starts).toHaveLength(0);
+    expect(repository.get("verified").status).toBe("READY");
+    const fingerprint = repository.latestWorkspaceVerificationAttempt("verified")?.fingerprint;
+    if (fingerprint === undefined) throw new Error("Expected verification fingerprint");
+
+    const completed = await dispatcher.dispatch({
+      ticketId: "verified", projectRoot, dirtyPolicy: "cancel",
+      verificationApproval: { fingerprint, allowVerification: true, rememberForProject: true },
+    });
+    expect(completed.status).toBe("READY_TO_MERGE");
+    expect(verificationRunner.verifications).toEqual(["pnpm run verify"]);
+    expect(repository.latestWorkspaceVerificationAttempt("verified")).toMatchObject({ status: "PASSED" });
+    expect(repository.history("verified").map((entry) => entry.toStatus)).toEqual(["READY", "RUNNING", "REVIEW", "READY_TO_MERGE"]);
+    repository.close();
+  });
 });
+
+class DeterministicVerificationRunner implements ProcessRunner {
+  public readonly verifications: string[] = [];
+  public async run(command: string, args: readonly string[], options: Parameters<ProcessRunner["run"]>[2]): Promise<ProcessResult> {
+    if (command === "git") return await runner.run(command, args, options);
+    if (args.includes("--version")) return { command, args, cwd: options.cwd, exitCode: 0, signal: null, stdout: `${command} 1.0.0\n`, stderr: "", durationMs: 1 };
+    this.verifications.push([command, ...args].join(" "));
+    return { command, args, cwd: options.cwd, exitCode: 0, signal: null, stdout: "verified\n", stderr: "", durationMs: 1 };
+  }
+}

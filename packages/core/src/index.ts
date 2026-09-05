@@ -29,5 +29,6 @@ export * from "./skill-bundle-manager.js";
 export * from "./ticket-actions.js";
 export * from "./ticket-repository.js";
 export * from "./workspace-preparation.js";
+export * from "./workspace-verification.js";
 
 export const RAYCODER_VERSION = "1.0.0-rc.6";

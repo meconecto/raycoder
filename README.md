@@ -58,6 +58,7 @@ pnpm installer:smoke
 pnpm dogfood:v1
 pnpm dogfood:rc4
 pnpm dogfood:preparation
+pnpm dogfood:verification
 pnpm dev -- /path/to/a/git/repository
 ```
 
@@ -75,6 +76,14 @@ the strategy, unit order, platform, executable/version, manifests, locks, script
 policy require approval again. Failed or interrupted preparation is durable, blocks the ticket
 without deleting its worktree, and can be inspected and retried. Unknown stacks continue with
 `NOT_APPLICABLE`; recognizable stacks without a valid lock are blocked with a diagnostic.
+
+After the agent commits its implementation and before review, raycoder runs an independent,
+durable verification plan. Node uses the project's `verify` script or its declared
+`typecheck`/`lint`/`test`/`build` scripts; uv, Poetry, Pipenv, Rust and Go use their locked,
+read-only conventions. Mixed repositories and Bash/PowerShell verification use the same ordered,
+contained configuration model. Verification output is sanitized and bounded, tracked-file
+changes fail the gate, and a changed command, tool, manifest, lock or script requires fresh
+approval. If the canonical base moved, the reconciliation worktree is subject to the same gate.
 
 Manual **Run** per ticket remains the default. A sequential Auto mode is an explicit future
 follow-up: it will be opt-in and pause for approvals, blockers, failures, or human intervention.
@@ -112,8 +121,9 @@ Projects are inspected before mutation, catalogued globally and opened as indepe
 `/api/projects/:projectId/` and exposes tickets, dependencies, history, provider sessions,
 capabilities and lifecycle actions. Planning generation creates a durable session and returns
 HTTP 202; clients poll the planning snapshot for persisted events, completion or errors.
-Workspace preparation is exposed through project configuration/approval endpoints and a
-per-ticket durable attempt history; ticket actions accept a fingerprinted approval when needed.
+Workspace preparation and verification are exposed through project configuration/approval
+endpoints and per-ticket durable attempt histories; ticket actions accept their independently
+fingerprinted approvals when needed.
 Mutations are serialized per project; different projects
 can run concurrently. The legacy single-project diagnostic endpoints remain available for
 the initial screen.

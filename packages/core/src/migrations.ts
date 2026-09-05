@@ -310,6 +310,43 @@ export const migrations: readonly Migration[] = [
         ON planning_sessions(retry_of_session_id, created_at, id);
     `,
   },
+  {
+    version: 8,
+    name: "durable_multistack_verification",
+    sql: `
+      CREATE TABLE workspace_verification_attempts (
+        id TEXT PRIMARY KEY,
+        ticket_id TEXT NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+        integration_attempt_id TEXT REFERENCES integration_attempts(id) ON DELETE SET NULL,
+        purpose TEXT NOT NULL CHECK (purpose IN ('dispatch', 'integration')),
+        status TEXT NOT NULL CHECK (status IN (
+          'AWAITING_APPROVAL', 'QUEUED', 'VERIFYING', 'PASSED', 'FAILED',
+          'UNAVAILABLE', 'CANCELLED', 'INTERRUPTED'
+        )),
+        strategy TEXT NOT NULL,
+        fingerprint TEXT NOT NULL,
+        plan_json TEXT NOT NULL,
+        approval_json TEXT,
+        workspace TEXT NOT NULL,
+        target_commit TEXT NOT NULL,
+        resumed_from_attempt_id TEXT REFERENCES workspace_verification_attempts(id) ON DELETE SET NULL,
+        process_json TEXT,
+        output TEXT,
+        diagnostic_code TEXT,
+        diagnostic_detail TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        completed_at TEXT
+      );
+
+      CREATE INDEX workspace_verification_ticket_created
+        ON workspace_verification_attempts(ticket_id, created_at, id);
+      CREATE INDEX workspace_verification_status
+        ON workspace_verification_attempts(status);
+      CREATE INDEX workspace_verification_integration
+        ON workspace_verification_attempts(integration_attempt_id, created_at);
+    `,
+  },
 ] as const;
 
 export function migrate(database: SqliteDatabase): void {

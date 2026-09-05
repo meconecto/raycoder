@@ -40,12 +40,13 @@ describe("TicketRepository", () => {
       { version: 5, name: "conversational_planning_sessions_and_traceability" },
       { version: 6, name: "durable_workspace_preparation" },
       { version: 7, name: "planning_retry_traceability" },
+      { version: 8, name: "durable_multistack_verification" },
     ]);
     first.close();
 
     const second = new TicketRepository(path);
     expect(second.get("one").status).toBe("READY");
-    expect(second.appliedMigrations()).toHaveLength(7);
+    expect(second.appliedMigrations()).toHaveLength(8);
     second.close();
   });
 
@@ -67,7 +68,7 @@ describe("TicketRepository", () => {
     const repository = new TicketRepository(path);
     repository.create(fixture("upgraded"));
 
-    expect(repository.appliedMigrations().map((migration) => migration.version)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    expect(repository.appliedMigrations().map((migration) => migration.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
     expect(repository.get("upgraded").status).toBe("READY");
     repository.close();
   });
@@ -99,7 +100,7 @@ describe("TicketRepository", () => {
     database.close();
 
     const first = new TicketRepository(path);
-    expect(first.appliedMigrations().map((migration) => migration.version)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    expect(first.appliedMigrations().map((migration) => migration.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
     expect(first.latestPlanningThread()).toMatchObject({ id: "thread-v4", status: "idle" });
     expect(first.planningMessages("thread-v4")).toMatchObject([{ content: "preserved message", sessionId: null }]);
     expect(first.getPlanningArtifact("artifact-v4")).toMatchObject({
@@ -110,7 +111,7 @@ describe("TicketRepository", () => {
     first.close();
 
     const second = new TicketRepository(path);
-    expect(second.appliedMigrations()).toHaveLength(7);
+    expect(second.appliedMigrations()).toHaveLength(8);
     expect(second.listPlanningSessions()).toEqual([]);
     second.close();
   });
@@ -138,12 +139,12 @@ describe("TicketRepository", () => {
 
     const first = new TicketRepository(path);
     expect(first.get("v5-ticket")).toMatchObject({ title: "V5", status: "READY" });
-    expect(first.appliedMigrations().map((migration) => migration.version)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    expect(first.appliedMigrations().map((migration) => migration.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
     expect(first.listWorkspacePreparationAttempts()).toEqual([]);
     first.close();
 
     const second = new TicketRepository(path);
-    expect(second.appliedMigrations()).toHaveLength(7);
+    expect(second.appliedMigrations()).toHaveLength(8);
     expect(second.get("v5-ticket").description).toBe("preserved");
     second.close();
   });
@@ -178,11 +179,50 @@ describe("TicketRepository", () => {
       errorCode: "quota_exhausted",
       retryOfSessionId: null,
     });
-    expect(repository.appliedMigrations().at(-1)).toEqual({ version: 7, name: "planning_retry_traceability" });
+    expect(repository.appliedMigrations().at(-2)).toEqual({ version: 7, name: "planning_retry_traceability" });
+    expect(repository.listWorkspaceVerificationAttempts()).toEqual([]);
     repository.close();
 
     const reopened = new TicketRepository(path);
-    expect(reopened.appliedMigrations()).toHaveLength(7);
+    expect(reopened.appliedMigrations()).toHaveLength(8);
+    reopened.close();
+  });
+
+  it("upgrades a real v7 database to v8 idempotently without losing ticket history", () => {
+    const directory = mkdtempSync(join(tmpdir(), "raycoder-db-v7-"));
+    temporaryDirectories.push(directory);
+    const path = join(directory, "raycoder.db");
+    const database = new SqliteDatabase(path);
+    database.exec(`CREATE TABLE schema_migrations (
+      version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL
+    );`);
+    for (const migration of migrations.slice(0, 7)) {
+      database.exec(migration.sql);
+      database.prepare("INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)")
+        .run(migration.version, migration.name, "2026-09-02T00:00:00.000Z");
+    }
+    database.prepare(`INSERT INTO tickets
+      (id, title, description, status, blocked_from, branch, base_branch, base_commit, workspace, created_at, updated_at)
+      VALUES ('v7-ticket', 'V7', 'preserved', 'READY', NULL, NULL, 'main', NULL, NULL, ?, ?)`)
+      .run("2026-09-02T00:00:00.000Z", "2026-09-02T00:00:00.000Z");
+    database.prepare(`INSERT INTO ticket_history
+      (ticket_id, from_status, to_status, reason, created_at)
+      VALUES ('v7-ticket', NULL, 'READY', 'created', ?)`)
+      .run("2026-09-02T00:00:00.000Z");
+    database.close();
+
+    const upgraded = new TicketRepository(path);
+    expect(upgraded.get("v7-ticket")).toMatchObject({ status: "READY", description: "preserved" });
+    expect(upgraded.history("v7-ticket")).toEqual([
+      expect.objectContaining({ fromStatus: null, toStatus: "READY", reason: "created" }),
+    ]);
+    expect(upgraded.listWorkspaceVerificationAttempts()).toEqual([]);
+    expect(upgraded.appliedMigrations().at(-1)).toEqual({ version: 8, name: "durable_multistack_verification" });
+    upgraded.close();
+
+    const reopened = new TicketRepository(path);
+    expect(reopened.appliedMigrations()).toHaveLength(8);
+    expect(reopened.history("v7-ticket")).toHaveLength(1);
     reopened.close();
   });
 

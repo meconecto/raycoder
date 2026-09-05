@@ -18,6 +18,7 @@ import { SkillBundleManager } from "./skill-bundle-manager.js";
 import { TicketActions } from "./ticket-actions.js";
 import { TicketRepository, type PlanningSession } from "./ticket-repository.js";
 import { WorkspacePreparationService } from "./workspace-preparation.js";
+import { WorkspaceVerificationService } from "./workspace-verification.js";
 
 export interface ProjectRuntimeOptions {
   readonly adapter: AgentAdapter;
@@ -28,6 +29,7 @@ export interface ProjectRuntimeOptions {
   readonly reviewMode?: ReviewMode;
   readonly skillBundle?: SkillBundleManager;
   readonly globalConfigStore?: GlobalConfigStore;
+  readonly workspaceVerification?: boolean;
 }
 
 export class ProjectRuntime {
@@ -42,6 +44,7 @@ export class ProjectRuntime {
   public readonly skills: SkillBundleManager;
   public readonly settings: SettingsService | null;
   public readonly preparation: WorkspacePreparationService;
+  public readonly verification: WorkspaceVerificationService;
   public readonly recovery: readonly RecoveryResult[];
   public readonly planningRecovery: readonly PlanningSession[];
   readonly #adapter: AgentAdapter;
@@ -58,6 +61,7 @@ export class ProjectRuntime {
     skills: SkillBundleManager;
     settings: SettingsService | null;
     preparation: WorkspacePreparationService;
+    verification: WorkspaceVerificationService;
     recovery: readonly RecoveryResult[];
     planningRecovery: readonly PlanningSession[];
     adapter: AgentAdapter;
@@ -73,6 +77,7 @@ export class ProjectRuntime {
     this.skills = input.skills;
     this.settings = input.settings;
     this.preparation = input.preparation;
+    this.verification = input.verification;
     this.recovery = input.recovery;
     this.planningRecovery = input.planningRecovery;
     this.#adapter = input.adapter;
@@ -101,19 +106,24 @@ export class ProjectRuntime {
     ).recoverUncontrolledShutdown();
     const preparation = new WorkspacePreparationService(repository, workspaces, runner);
     preparation.recoverInterrupted();
+    const verification = new WorkspaceVerificationService(repository, runner);
+    verification.recoverInterrupted();
+    const activeVerification = options.workspaceVerification === false ? null : verification;
     const dispatcher = new Dispatcher(
       repository,
       workspaces,
       options.adapter,
       options.reviewer ?? options.adapter,
       options.reviewMode ?? effective?.reviewMode ?? "independent",
+      activeVerification,
     );
     const integration = new IntegrationService(repository, projectRoot, options.integrationMode ?? effective?.integrationMode ?? "auto", {
       runner,
       preparation,
+      ...(activeVerification === null ? {} : { verification: activeVerification }),
       ...(options.verifier === undefined ? {} : { verifier: options.verifier }),
     });
-    const orchestrator = new ProjectOrchestrator(repository, dispatcher, integration, preparation);
+    const orchestrator = new ProjectOrchestrator(repository, dispatcher, integration, preparation, activeVerification);
     const scheduler = new Scheduler(repository, orchestrator, projectRoot);
     const tickets = new TicketActions(repository, orchestrator, scheduler, baseBranch, projectRoot);
     const planning = new PlanningPipeline(repository, options.adapter, projectRoot, baseBranch);
@@ -131,6 +141,7 @@ export class ProjectRuntime {
       skills,
       settings,
       preparation,
+      verification,
       recovery,
       planningRecovery,
       adapter: options.adapter,

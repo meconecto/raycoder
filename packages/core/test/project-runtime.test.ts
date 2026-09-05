@@ -73,7 +73,7 @@ describe("ProjectRegistry and ProjectRuntime", () => {
 
     const manager = new ProjectManager(
       new ProjectRegistry(join(root, "projects.db")),
-      () => ({ adapter: new FakeAgentAdapter() }),
+      () => ({ adapter: new FakeAgentAdapter(), workspaceVerification: false }),
       inspector,
     );
     const runtime = await manager.initialize({ path: existing, confirmGitInit: true });
@@ -91,7 +91,7 @@ describe("ProjectRegistry and ProjectRuntime", () => {
     const globalRoot = mkdtempSync(join(tmpdir(), "raycoder-manager-"));
     temporaryDirectories.push(globalRoot);
     const registry = new ProjectRegistry(join(globalRoot, "projects.db"));
-    const manager = new ProjectManager(registry, () => ({ adapter: new FakeAgentAdapter() }));
+    const manager = new ProjectManager(registry, () => ({ adapter: new FakeAgentAdapter(), workspaceVerification: false }));
     const [first, second] = await Promise.all([
       manager.register(await gitFixture("project-a")),
       manager.register(await gitFixture("project-b")),
@@ -116,7 +116,7 @@ describe("ProjectRegistry and ProjectRuntime", () => {
     temporaryDirectories.push(globalRoot);
     const manager = new ProjectManager(
       new ProjectRegistry(join(globalRoot, "projects.db")),
-      () => ({ adapter: new FakeAgentAdapter() }),
+      () => ({ adapter: new FakeAgentAdapter(), workspaceVerification: false }),
     );
     const first = await manager.register(await gitFixture("planning-recovery"));
     const projectId = manager.list()[0]?.project.id;
@@ -146,7 +146,7 @@ describe("ProjectRegistry and ProjectRuntime", () => {
     const preparationRunner = new RuntimePreparationRunner();
     const manager = new ProjectManager(
       new ProjectRegistry(join(globalRoot, "projects.db")),
-      () => ({ adapter, runner: preparationRunner }),
+      () => ({ adapter, runner: preparationRunner, workspaceVerification: false }),
     );
     const runtime = await manager.register(project);
     runtime.tickets.create({ id: "prepared-first", title: "Prepared first", description: "gate adapter" });

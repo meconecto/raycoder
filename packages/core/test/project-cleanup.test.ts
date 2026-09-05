@@ -26,7 +26,7 @@ async function setup(adapter = new FakeAgentAdapter()): Promise<{
   temporaryDirectories.push(root, global);
   await runner.run("git", ["init", "-b", "main"], { cwd: root });
   await runner.run("git", ["-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "--allow-empty", "-m", "base"], { cwd: root });
-  const manager = new ProjectManager(new ProjectRegistry(join(global, "projects.db")), () => ({ adapter }));
+  const manager = new ProjectManager(new ProjectRegistry(join(global, "projects.db")), () => ({ adapter, workspaceVerification: false }));
   await manager.register(root, "Cleanup fixture");
   const projectId = manager.list()[0]?.project.id;
   if (projectId === undefined) throw new Error("Expected project registration");
@@ -103,6 +103,39 @@ describe("ProjectCleanupService", () => {
 
     expect(target).toMatchObject({ dirty: false, requiresForce: true, selectedByDefault: false });
     expect(plan.warnings).toContainEqual(expect.objectContaining({ code: "preparation.preserved", targetId: target?.id }));
+    fixture.manager.close();
+  }, 20_000);
+
+  it("preserves a clean worktree that is awaiting verification approval", async () => {
+    const fixture = await setup();
+    writeFileSync(join(fixture.root, "package.json"), JSON.stringify({
+      private: true,
+      packageManager: "pnpm@11.19.0",
+      scripts: { verify: "fixture" },
+    }), "utf8");
+    writeFileSync(join(fixture.root, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n", "utf8");
+    await runner.run("git", ["add", "package.json", "pnpm-lock.yaml"], { cwd: fixture.root });
+    await runner.run("git", [
+      "-c", "user.name=raycoder tests",
+      "-c", "user.email=tests@raycoder.local",
+      "commit", "-m", "test: add verifiable node stack",
+    ], { cwd: fixture.root });
+    const runtime = fixture.manager.get(fixture.projectId);
+    runtime.tickets.create({ id: "verification-approval", title: "Verification", description: "preserve verification" });
+    await runtime.preparation.prepareTicket({
+      ticketId: "verification-approval", projectRoot: fixture.root, dirtyPolicy: "cancel",
+    }).catch(() => undefined);
+    const ticket = runtime.repository.get("verification-approval");
+    if (ticket.workspace === null || ticket.baseCommit === null) throw new Error("Expected prepared workspace metadata");
+    await runtime.verification.authorize({
+      ticketId: ticket.id, workspace: ticket.workspace, targetCommit: ticket.baseCommit,
+    }).catch(() => undefined);
+
+    const plan = await fixture.cleanup.plan(fixture.projectId);
+    const target = plan.targets.find((candidate) => candidate.kind === "ticket_worktree" && candidate.ticketId === ticket.id);
+
+    expect(target).toMatchObject({ dirty: false, requiresForce: true, selectedByDefault: false });
+    expect(plan.warnings).toContainEqual(expect.objectContaining({ code: "verification.preserved", targetId: target?.id }));
     fixture.manager.close();
   }, 20_000);
 
