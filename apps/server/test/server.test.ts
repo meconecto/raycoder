@@ -2,11 +2,11 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Script } from "node:vm";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   Dispatcher,
   FakeAgentAdapter,
+  GlobalConfigStore,
   GitWorkspaceManager,
   IntegrationService,
   NodeProcessRunner,
@@ -85,7 +85,8 @@ describe("minimal server", () => {
       expect(html).toContain("data-tab=\"dag\"");
       expect(html).toContain('<script type="module" src="/app.js"></script>');
       const app = await (await fetch(`${root}/app.js`)).text();
-      expect(() => new Script(app)).not.toThrow();
+      expect(app).toContain('from "./api.js"');
+      expect(await (await fetch(`${root}/i18n.js`)).text()).toContain("quotaTitle");
     } finally {
       await new Promise<void>((resolve, reject) => server.close((error) => error === undefined ? resolve() : reject(error)));
       repository.close();
@@ -499,6 +500,75 @@ describe("minimal server", () => {
         method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "cancel" }),
       });
       expect(closeInterrupted.status).toBe(200);
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error === undefined ? resolve() : reject(error)));
+      projects.close();
+    }
+  }, 20_000);
+
+  it("exposes actionable planning failures, traced retry and UI preferences", async () => {
+    const projectRoot = await createRepository();
+    const registryRoot = mkdtempSync(join(tmpdir(), "raycoder-actionable-error-"));
+    temporaryDirectories.push(registryRoot);
+    const config = new GlobalConfigStore(join(registryRoot, "config.json"));
+    await config.write({
+      version: 3,
+      integrationMode: "auto",
+      reviewMode: "independent",
+      stages: Object.fromEntries(["planning", "specification", "ticketing", "implementation", "review"].map((stage) => [
+        stage,
+        { provider: "fake", model: "deterministic", effort: null },
+      ])) as never,
+      ui: { locale: "auto", theme: "system" },
+    });
+    const projects = new ProjectManager(
+      new ProjectRegistry(join(registryRoot, "projects.db")),
+      () => ({ adapter: new FakeAgentAdapter(), globalConfigStore: config }),
+    );
+    const runtime = await projects.register(projectRoot);
+    const projectId = projects.list()[0]?.project.id;
+    if (projectId === undefined) throw new Error("Expected registered project");
+    const failed = await runtime.planning.prepareMessage("One durable user message");
+    runtime.repository.updatePlanningSession(failed.id, {
+      status: "error",
+      errorCode: "quota_exhausted",
+      errorDetail: "You've hit your usage limit; try again later.",
+      completedAt: "2026-09-05T03:06:20.360Z",
+    });
+    const server = createRaycoderServer({ projects, preflight: executablePreflight(), configStore: config });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as AddressInfo).port;
+    const api = `http://127.0.0.1:${port}`;
+    const root = `${api}/api/projects/${projectId}`;
+    try {
+      expect(await (await fetch(`${root}/activity`)).json()).toMatchObject({
+        summary: { count: 1, highestSeverity: "error", latestCode: "quota_exhausted" },
+        items: [{ sessionId: failed.id, action: "retry_planning", resolved: false }],
+      });
+      const retryResponse = await fetch(`${root}/planning/sessions/${failed.id}/actions`, {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "retry" }),
+      });
+      expect(retryResponse.status).toBe(202);
+      const retry = await retryResponse.json() as { session: { id: string; retryOfSessionId: string } };
+      expect(retry.session.retryOfSessionId).toBe(failed.id);
+      await waitFor(() => runtime.repository.getPlanningSession(retry.session.id).status === "completed");
+      expect(runtime.repository.planningMessages(failed.threadId).filter((message) => message.role === "user"))
+        .toHaveLength(1);
+      expect(await (await fetch(`${root}/activity`)).json()).toMatchObject({ summary: { count: 0 } });
+
+      expect(await (await fetch(`${api}/api/preferences`)).json()).toEqual({
+        preferences: { locale: "auto", theme: "system" },
+      });
+      const preferences = await fetch(`${api}/api/preferences`, {
+        method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ locale: "es", theme: "light" }),
+      });
+      expect(preferences.status).toBe(200);
+      expect(await preferences.json()).toEqual({ preferences: { locale: "es", theme: "light" } });
+      const invalid = await fetch(`${api}/api/preferences`, {
+        method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ locale: "xx", theme: "light" }),
+      });
+      expect(invalid.status).toBe(400);
+      expect(await invalid.json()).toMatchObject({ code: "preferences.invalid" });
     } finally {
       await new Promise<void>((resolve, reject) => server.close((error) => error === undefined ? resolve() : reject(error)));
       projects.close();

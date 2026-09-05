@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   FakeAgentAdapter,
+  GlobalConfigStore,
   MemoryService,
   ProjectManager,
   ProjectRegistry,
@@ -38,11 +39,13 @@ function setup(): { projects: ProjectManager; host: RaycoderApplicationHost } {
   const global = mkdtempSync(join(tmpdir(), "raycoder-host-global-"));
   temporaryDirectories.push(global);
   const projects = new ProjectManager(new ProjectRegistry(join(global, "projects.db")), () => ({ adapter: new FakeAgentAdapter() }));
+  const config = new GlobalConfigStore(join(global, "config.json"));
   return {
     projects,
     host: new RaycoderApplicationHost({
       projects,
       memory: new MemoryService(unavailableRunner, join(global, "codex.toml")),
+      config,
       preflight: limitedPreflight,
       runPreflight: async () => limitedPreflight,
     }),
@@ -51,7 +54,7 @@ function setup(): { projects: ProjectManager; host: RaycoderApplicationHost } {
 
 async function listen(host: RaycoderApplicationHost): Promise<{ root: string; close: () => Promise<void> }> {
   const server = createRaycoderServer({ app: host });
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const port = (server.address() as AddressInfo).port;
   return {
     root: `http://127.0.0.1:${port}`,
