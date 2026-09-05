@@ -134,8 +134,8 @@ function base() {
 
 async function refreshProject() {
   if (!state.project) return;
-  const [ticketData, dependencyData, planning, capabilities, inspection, preparation, activity] = await Promise.all([
-    json(`${base()}/tickets`), json(`${base()}/dependencies`), json(`${base()}/planning`), json(`${base()}/capabilities`), json(`${base()}/inspection`), json(`${base()}/preparation`), json(`${base()}/activity`),
+  const [ticketData, dependencyData, planning, capabilities, inspection, preparation, verification, activity] = await Promise.all([
+    json(`${base()}/tickets`), json(`${base()}/dependencies`), json(`${base()}/planning`), json(`${base()}/capabilities`), json(`${base()}/inspection`), json(`${base()}/preparation`), json(`${base()}/verification`), json(`${base()}/activity`),
   ]);
   state.tickets = ticketData.tickets;
   state.dependencies = dependencyData.dependencies;
@@ -143,6 +143,7 @@ async function refreshProject() {
   state.capabilities = capabilities;
   state.inspection = inspection;
   state.preparation = preparation;
+  state.verification = verification;
   state.activity = activity;
   const entry = state.projects.find((candidate) => candidate.project.id === state.project.id);
   if (entry) entry.attention = activity.summary;
@@ -177,7 +178,8 @@ function ticketCard(ticket) {
   if (attempt?.status === "AWAITING_CONFIRMATION") buttons.push(`<button data-ticket-action="confirm" data-attempt="${esc(attempt.id)}" data-ticket="${esc(ticket.id)}" class="primary">Confirm</button>`);
   if (!["DONE", "CANCELLED"].includes(ticket.status)) buttons.push(`<button data-ticket-action="cancel" data-ticket="${esc(ticket.id)}">Cancel</button>`);
   const preparation = ticket.preparation;
-  return `<article class="card"><div class="row"><h3>${esc(ticket.title)}</h3><span class="status ${esc(ticket.status)}">${esc(ticket.status)}</span></div><p>${esc(ticket.description)}</p><small class="muted">${esc(ticket.id)}${ticket.branch ? ` · ${esc(ticket.branch)}` : ""}</small>${preparation ? `<p><small>Preparation: <span class="status ${esc(preparation.status)}">${esc(preparation.status)}</span> · ${esc(preparation.strategy)}</small></p>` : ""}${preparation?.diagnosticDetail ? `<p class="error">${esc(preparation.diagnosticCode)} · ${esc(preparation.diagnosticDetail)}</p>` : ""}${preparation?.output ? `<details><summary>Preparation output</summary><pre>${esc(preparation.output.slice(0, 2_000))}</pre></details>` : ""}${ticket.review ? `<p><small>Review: ${esc(ticket.review.verdict)} — ${esc(ticket.review.summary)}</small></p>` : ""}${attempt?.diagnosticCode ? `<p class="error">${esc(attempt.diagnosticCode)} · ${esc(attempt.diagnosticDetail)}</p>` : ""}<div class="actions">${buttons.join("")}</div></article>`;
+  const verification = ticket.verification;
+  return `<article class="card"><div class="row"><h3>${esc(ticket.title)}</h3><span class="status ${esc(ticket.status)}">${esc(ticket.status)}</span></div><p>${esc(ticket.description)}</p><small class="muted">${esc(ticket.id)}${ticket.branch ? ` · ${esc(ticket.branch)}` : ""}</small>${preparation ? `<p><small>Preparation: <span class="status ${esc(preparation.status)}">${esc(preparation.status)}</span> · ${esc(preparation.strategy)}</small></p>` : ""}${preparation?.diagnosticDetail ? `<p class="error">${esc(preparation.diagnosticCode)} · ${esc(preparation.diagnosticDetail)}</p>` : ""}${preparation?.output ? `<details><summary>Preparation output</summary><pre>${esc(preparation.output.slice(0, 2_000))}</pre></details>` : ""}${verification ? `<p><small>Verification: <span class="status ${esc(verification.status)}">${esc(verification.status)}</span> · ${esc(verification.strategy)}</small></p>` : ""}${verification?.diagnosticDetail ? `<p class="error">${esc(verification.diagnosticCode)} · ${esc(verification.diagnosticDetail)}</p>` : ""}${verification?.output ? `<details><summary>Verification output</summary><pre>${esc(verification.output.slice(0, 2_000))}</pre></details>` : ""}${ticket.review ? `<p><small>Review: ${esc(ticket.review.verdict)} — ${esc(ticket.review.summary)}</small></p>` : ""}${attempt?.diagnosticCode ? `<p class="error">${esc(attempt.diagnosticCode)} · ${esc(attempt.diagnosticDetail)}</p>` : ""}<div class="actions">${buttons.join("")}</div></article>`;
 }
 
 function renderOverview() {
@@ -377,6 +379,49 @@ function renderDetectedPreparation(preparation) {
   return `<div class="ticket-plan-rows">${plan.units.map((unit) => `<article class="target"><span><strong>${esc(unit.strategy)} · ${esc(unit.root)}</strong><small>${unit.commands.map((command) => esc(command.display)).join("<br>")}</small><small>${esc(unit.executablePath || "tool unavailable")} · ${esc(unit.toolVersion)}</small></span></article>`).join("")}</div><small class="muted">Fingerprint ${esc(plan.fingerprint)}</small>`;
 }
 
+function verificationUnitRow(unit = { root: ".", strategy: "pnpm" }) {
+  const shell = ["bash", "pwsh"].includes(unit.strategy);
+  return `<div class="ticket-plan-row" data-verification-unit>
+    <div class="row"><strong>Verification unit</strong><div class="actions"><button data-verification-up title="Move up">↑</button><button data-verification-down title="Move down">↓</button><button data-remove-verification title="Remove unit">Remove</button></div></div>
+    <label>Repository-relative root<input data-verification-root value="${esc(unit.root || ".")}" placeholder="packages/api"></label>
+    <label>Strategy<select data-verification-strategy>${preparationStrategies.map((strategy) => `<option value="${strategy}" ${strategy === unit.strategy ? "selected" : ""}>${strategy}</option>`).join("")}</select></label>
+    <label data-verification-shell class="${shell ? "" : "hidden"}">Tracked script<input data-verification-script value="${esc(unit.script || "")}" placeholder="scripts/verify.sh"></label>
+    <label data-verification-shell class="${shell ? "" : "hidden"}">Literal arguments <small>one per line; never interpolated by a shell</small><textarea data-verification-args>${esc((unit.args || []).join("\n"))}</textarea></label>
+  </div>`;
+}
+
+function readVerificationConfig() {
+  if ($("#verification-mode").value === "auto") return { mode: "auto" };
+  return {
+    mode: "explicit",
+    units: [...document.querySelectorAll("[data-verification-unit]")].map((row) => {
+      const strategy = row.querySelector("[data-verification-strategy]").value;
+      const unit = { root: row.querySelector("[data-verification-root]").value.trim(), strategy };
+      if (["bash", "pwsh"].includes(strategy)) {
+        unit.script = row.querySelector("[data-verification-script]").value.trim();
+        unit.args = row.querySelector("[data-verification-args]").value.split("\n").map((value) => value.trim()).filter(Boolean);
+      }
+      return unit;
+    }),
+  };
+}
+
+function syncVerificationEditor() {
+  const explicit = $("#verification-mode")?.value === "explicit";
+  $("#verification-unit-editor")?.classList.toggle("hidden", !explicit);
+  $("#add-verification-unit")?.classList.toggle("hidden", !explicit);
+  if (explicit && document.querySelectorAll("[data-verification-unit]").length === 0) {
+    $("#verification-unit-editor").insertAdjacentHTML("beforeend", verificationUnitRow());
+  }
+}
+
+function renderDetectedVerification(verification) {
+  if (verification.diagnostic) return `<p class="error">${esc(verification.diagnostic.code)} · ${esc(verification.diagnostic.error)}</p>`;
+  const plan = verification.detectedPlan;
+  if (!plan?.applicable) return '<p class="error">No verification convention is configured. Ticket execution will remain blocked.</p>';
+  return `<div class="ticket-plan-rows">${plan.units.map((unit) => `<article class="target"><span><strong>${esc(unit.strategy)} · ${esc(unit.root)}</strong><small>${unit.commands.map((command) => esc(command.display)).join("<br>")}</small><small>${esc(unit.executablePath || "tool unavailable")} · ${esc(unit.toolVersion)}</small></span></article>`).join("")}</div><small class="muted">Fingerprint ${esc(plan.fingerprint)}</small>`;
+}
+
 function renderTickets() {
   content.className = "stack";
   content.innerHTML = `<div class="grid">${state.tickets.map(ticketCard).join("") || '<div class="empty">No tickets.</div>'}</div><article class="card"><h3>Create ticket</h3><input id="ticket-title" placeholder="Title"><textarea id="ticket-description" placeholder="What this vertical slice delivers"></textarea><input id="ticket-predecessors" placeholder="Predecessor ids, comma separated"><button id="create-ticket" class="primary">Create</button></article>`;
@@ -428,8 +473,13 @@ function renderProgress() {
 async function renderHistory() {
   content.className = "stack";
   content.innerHTML = '<div class="empty">Loading history…</div>';
-  const rows = await Promise.all(state.tickets.map(async (ticket) => ({ ticket, data: await json(`${base()}/tickets/${encodeURIComponent(ticket.id)}/history`), preparation: await json(`${base()}/tickets/${encodeURIComponent(ticket.id)}/preparation`) })));
-  content.innerHTML = rows.map(({ ticket, data, preparation }) => `<article class="card"><h3>${esc(ticket.title)}</h3><pre>${esc(data.history.map((entry) => `${entry.createdAt}  ${entry.fromStatus || "∅"} → ${entry.toStatus}  ${entry.reason}`).join("\n"))}</pre>${preparation.attempts.length ? `<h4>Workspace preparation</h4><pre>${esc(JSON.stringify(preparation.attempts, null, 2))}</pre>` : ""}</article>`).join("") || '<div class="empty">No history.</div>';
+  const rows = await Promise.all(state.tickets.map(async (ticket) => ({
+    ticket,
+    data: await json(`${base()}/tickets/${encodeURIComponent(ticket.id)}/history`),
+    preparation: await json(`${base()}/tickets/${encodeURIComponent(ticket.id)}/preparation`),
+    verification: await json(`${base()}/tickets/${encodeURIComponent(ticket.id)}/verification`),
+  })));
+  content.innerHTML = rows.map(({ ticket, data, preparation, verification }) => `<article class="card"><h3>${esc(ticket.title)}</h3><pre>${esc(data.history.map((entry) => `${entry.createdAt}  ${entry.fromStatus || "∅"} → ${entry.toStatus}  ${entry.reason}`).join("\n"))}</pre>${preparation.attempts.length ? `<h4>Workspace preparation</h4><pre>${esc(JSON.stringify(preparation.attempts, null, 2))}</pre>` : ""}${verification.attempts.length ? `<h4>Workspace verification</h4><pre>${esc(JSON.stringify(verification.attempts, null, 2))}</pre>` : ""}</article>`).join("") || '<div class="empty">No history.</div>';
 }
 
 async function renderSessions() {
@@ -442,8 +492,9 @@ async function renderSessions() {
 async function renderSettings() {
   content.className = "stack";
   content.innerHTML = '<div class="empty">Loading settings…</div>';
-  const [settings, preparation] = await Promise.all([json(`${base()}/settings`), json(`${base()}/preparation`)]);
+  const [settings, preparation, verification] = await Promise.all([json(`${base()}/settings`), json(`${base()}/preparation`), json(`${base()}/verification`)]);
   const units = preparation.config.mode === "explicit" ? preparation.config.units || [] : [];
+  const verificationUnits = verification.config.mode === "explicit" ? verification.config.units || [] : [];
   const effective = settings?.effective;
   content.innerHTML = `<article class="card"><div class="row"><div><p class="kicker">Agent policy</p><h3>Project configuration</h3></div><small class="muted">Saved as a validated project override</small></div>
     <div class="settings-grid"><label>Integration<select id="settings-integration"><option value="auto" ${effective?.integrationMode === "auto" ? "selected" : ""}>Automatic after review</option><option value="confirm" ${effective?.integrationMode === "confirm" ? "selected" : ""}>Always confirm</option></select></label>
@@ -451,7 +502,9 @@ async function renderSettings() {
     <div class="stage-table">${Object.entries(effective?.stages || {}).map(([stage, value]) => stageSettingsRow(stage, value)).join("")}</div>
     <button id="save-settings" class="primary">Validate and save</button>
     <details><summary>Raw effective configuration</summary><pre>${esc(JSON.stringify(effective, null, 2))}</pre></details>
-  </article><article class="card"><h3>Workspace preparation</h3><p>Auto-detection handles one unambiguous root stack. Mixed repositories use ordered units; shell steps must point to tracked Bash or PowerShell files.</p><label>Detection mode<select id="preparation-mode"><option value="auto" ${preparation.config.mode === "auto" ? "selected" : ""}>Auto-detect root stack</option><option value="explicit" ${preparation.config.mode === "explicit" ? "selected" : ""}>Explicit ordered units</option></select></label><div id="preparation-unit-editor" class="ticket-plan-rows ${preparation.config.mode === "explicit" ? "" : "hidden"}">${units.map(preparationUnitRow).join("")}</div><div class="actions"><button id="add-preparation-unit" class="${preparation.config.mode === "explicit" ? "" : "hidden"}">Add unit</button><button id="save-preparation" class="primary">Save preparation</button><button id="revoke-preparation" ${preparation.approval ? "" : "disabled"}>Revoke approval</button></div>${renderDetectedPreparation(preparation)}</article><article class="card"><h3>Future Auto mode</h3><p>Automatic sequential ticket execution is planned as an opt-in feature. Manual Run remains the default.</p></article><article class="card"><h3>Safe cleanup</h3><p>Preview registered worktrees, branches, metadata and global registration before deleting anything.</p><button id="plan-cleanup" class="danger-button">Build cleanup plan</button></article>`;
+  </article><article class="card"><h3>Workspace preparation</h3><p>Auto-detection handles one unambiguous root stack. Mixed repositories use ordered units; shell steps must point to tracked Bash or PowerShell files.</p><label>Detection mode<select id="preparation-mode"><option value="auto" ${preparation.config.mode === "auto" ? "selected" : ""}>Auto-detect root stack</option><option value="explicit" ${preparation.config.mode === "explicit" ? "selected" : ""}>Explicit ordered units</option></select></label><div id="preparation-unit-editor" class="ticket-plan-rows ${preparation.config.mode === "explicit" ? "" : "hidden"}">${units.map(preparationUnitRow).join("")}</div><div class="actions"><button id="add-preparation-unit" class="${preparation.config.mode === "explicit" ? "" : "hidden"}">Add unit</button><button id="save-preparation" class="primary">Save preparation</button><button id="revoke-preparation" ${preparation.approval ? "" : "disabled"}>Revoke approval</button></div>${renderDetectedPreparation(preparation)}</article>
+  <article class="card"><h3>Workspace verification</h3><p>Verification runs after implementation and before review. Mixed repositories use ordered units; unknown conventions block instead of guessing.</p><label>Detection mode<select id="verification-mode"><option value="auto" ${verification.config.mode === "auto" ? "selected" : ""}>Auto-detect root stack</option><option value="explicit" ${verification.config.mode === "explicit" ? "selected" : ""}>Explicit ordered units</option></select></label><div id="verification-unit-editor" class="ticket-plan-rows ${verification.config.mode === "explicit" ? "" : "hidden"}">${verificationUnits.map(verificationUnitRow).join("")}</div><div class="actions"><button id="add-verification-unit" class="${verification.config.mode === "explicit" ? "" : "hidden"}">Add unit</button><button id="save-verification" class="primary">Save verification</button><button id="revoke-verification" ${verification.approval ? "" : "disabled"}>Revoke approval</button></div>${renderDetectedVerification(verification)}</article>
+  <article class="card"><h3>Future Auto mode</h3><p>Automatic sequential ticket execution is planned as an opt-in feature. Manual Run remains the default.</p></article><article class="card"><h3>Safe cleanup</h3><p>Preview registered worktrees, branches, metadata and global registration before deleting anything.</p><button id="plan-cleanup" class="danger-button">Build cleanup plan</button></article>`;
 }
 
 function stageSettingsRow(stage, selected) {
@@ -480,21 +533,52 @@ function readSettingsOverride() {
   };
 }
 
-function showPreparationApproval(error, request) {
+async function showWorkspaceApproval(error, request) {
   const plan = error.details?.plan;
   if (!plan) throw error;
-  state.pendingPreparationAction = { request, fingerprint: plan.fingerprint };
-  $("#preparation-commands").innerHTML = plan.units.map((unit) => `<article class="target"><span><strong>${esc(unit.strategy)} · ${esc(unit.root)}</strong><small>${unit.commands.map((command) => esc(command.display)).join("<br>")}</small><small>${esc(unit.executablePath || "tool unavailable")} · ${esc(unit.toolVersion)}</small></span></article>`).join("");
-  $("#preparation-fingerprint").textContent = `Fingerprint ${plan.fingerprint}`;
-  $("#preparation-dialog").showModal();
+  const sourceKind = error.code.startsWith("verification.") ? "verification" : "preparation";
+  const ticketVerification = sourceKind === "preparation"
+    ? await json(`${base()}/tickets/${encodeURIComponent(request.ticketId)}/verification`)
+    : null;
+  const verificationPlan = ticketVerification?.detectedPlan ?? null;
+  const includeVerification = verificationPlan?.applicable
+    && verificationPlan.units.every((unit) => unit.toolAvailable)
+    && state.verification?.approval?.fingerprint !== verificationPlan.fingerprint;
+  const kind = includeVerification ? "combined" : sourceKind;
+  state.pendingWorkspaceAction = {
+    request,
+    kind,
+    ...(sourceKind === "preparation" ? { preparationFingerprint: plan.fingerprint } : { verificationFingerprint: plan.fingerprint }),
+    ...(includeVerification ? { verificationFingerprint: verificationPlan.fingerprint } : {}),
+  };
+  $("#workspace-approval-title").textContent = kind === "combined"
+    ? "Allow workspace setup and verification?"
+    : kind === "verification" ? "Allow project verification?" : "Allow reproducible setup?";
+  $("#workspace-approval-description").textContent = kind === "combined"
+    ? "Setup may use the network or install scripts. Verification executes the commands shown after implementation and before review."
+    : kind === "verification"
+      ? "These commands execute project code after implementation and before review."
+      : "These commands may use the network and execute dependency or project install scripts.";
+  const renderPlan = (label, current) => `<section class="stack"><strong>${esc(label)}</strong>${current.units.map((unit) => `<article class="target"><span><strong>${esc(unit.strategy)} · ${esc(unit.root)}</strong><small>${unit.commands.map((command) => esc(command.display)).join("<br>")}</small><small>${esc(unit.executablePath || "tool unavailable")} · ${esc(unit.toolVersion)}</small></span></article>`).join("")}</section>`;
+  $("#workspace-approval-commands").innerHTML = [
+    sourceKind === "preparation" ? renderPlan("Preparation", plan) : "",
+    sourceKind === "verification" ? renderPlan("Verification", plan) : "",
+    includeVerification ? renderPlan("Verification", verificationPlan) : "",
+  ].join("");
+  $("#workspace-approval-fingerprint").textContent = [
+    sourceKind === "preparation" ? `Preparation fingerprint ${plan.fingerprint}` : "",
+    sourceKind === "verification" ? `Verification fingerprint ${plan.fingerprint}` : "",
+    includeVerification ? `Verification fingerprint ${verificationPlan.fingerprint}` : "",
+  ].filter(Boolean).join(" · ");
+  $("#workspace-approval-dialog").showModal();
 }
 
 async function executeTicketAction(ticketId, body) {
   try {
     return await json(`${base()}/tickets/${encodeURIComponent(ticketId)}/actions`, mutation(body));
   } catch (error) {
-    if (["preparation.approval_required", "preparation.plan_changed"].includes(error.code)) {
-      showPreparationApproval(error, {
+    if (["preparation.approval_required", "preparation.plan_changed", "verification.approval_required", "verification.plan_changed"].includes(error.code)) {
+      await showWorkspaceApproval(error, {
         ticketId,
         body: error.details?.purpose === "integration" ? { ...body, action: "retry" } : body,
       });
@@ -700,15 +784,28 @@ $("#content").addEventListener("click", (event) => {
   if (target.dataset.preparationDown !== undefined) { const row = target.closest("[data-preparation-unit]"); if (row?.nextElementSibling) row.parentElement.insertBefore(row.nextElementSibling, row); return; }
   if (target.id === "save-preparation") { void action(() => json(`${base()}/preparation/config`, mutationMethod("PUT", readPreparationConfig()))); return; }
   if (target.id === "revoke-preparation") { void action(() => json(`${base()}/preparation/approval`, mutationMethod("DELETE"))); return; }
+  if (target.id === "add-verification-unit") { $("#verification-unit-editor").insertAdjacentHTML("beforeend", verificationUnitRow()); return; }
+  if (target.dataset.removeVerification !== undefined) { target.closest("[data-verification-unit]")?.remove(); return; }
+  if (target.dataset.verificationUp !== undefined) { const row = target.closest("[data-verification-unit]"); if (row?.previousElementSibling) row.parentElement.insertBefore(row, row.previousElementSibling); return; }
+  if (target.dataset.verificationDown !== undefined) { const row = target.closest("[data-verification-unit]"); if (row?.nextElementSibling) row.parentElement.insertBefore(row.nextElementSibling, row); return; }
+  if (target.id === "save-verification") { void action(() => json(`${base()}/verification/config`, mutationMethod("PUT", readVerificationConfig()))); return; }
+  if (target.id === "revoke-verification") { void action(() => json(`${base()}/verification/approval`, mutationMethod("DELETE"))); return; }
   if (target.id === "plan-cleanup") { void action(buildCleanupPlan, false); return; }
   if (target.dataset.preview) { const active = state.tickets.find((ticket) => ["RUNNING", "REVIEW", "CHANGES_REQUESTED", "READY_TO_MERGE"].includes(ticket.status)); void action(() => json(`${base()}/preview`, mutation({ action: target.dataset.preview, ticketId: active?.id }))); }
 });
 $("#content").addEventListener("change", (event) => {
   if (event.target.id === "preparation-mode") { syncPreparationEditor(); return; }
+  if (event.target.id === "verification-mode") { syncVerificationEditor(); return; }
   if (event.target.matches("[data-preparation-strategy]")) {
     const row = event.target.closest("[data-preparation-unit]");
     const shell = ["bash", "pwsh"].includes(event.target.value);
     row?.querySelectorAll("[data-preparation-shell]").forEach((field) => field.classList.toggle("hidden", !shell));
+    return;
+  }
+  if (event.target.matches("[data-verification-strategy]")) {
+    const row = event.target.closest("[data-verification-unit]");
+    const shell = ["bash", "pwsh"].includes(event.target.value);
+    row?.querySelectorAll("[data-verification-shell]").forEach((field) => field.classList.toggle("hidden", !shell));
   }
 });
 $("#nav").addEventListener("click", (event) => {
@@ -729,20 +826,16 @@ $("#browse-project").addEventListener("click", () => void action(async () => {
   else if (result.status === "unavailable") $("#inspection").textContent = `${result.diagnostic} Enter the path manually.`;
 }, false));
 $("#execute-cleanup").addEventListener("click", () => void action(executeCleanup, false));
-$("#approve-preparation").addEventListener("click", () => void action(async () => {
-  const pending = state.pendingPreparationAction;
-  if (!pending) throw new Error("No workspace preparation is awaiting approval");
-  $("#preparation-dialog").close();
-  state.pendingPreparationAction = null;
-  await executeTicketAction(pending.request.ticketId, {
-    ...pending.request.body,
-    preparationApproval: {
-      fingerprint: pending.fingerprint,
-      allowNetwork: true,
-      allowInstallScripts: true,
-      rememberForProject: true,
-    },
-  });
+$("#approve-workspace").addEventListener("click", () => void action(async () => {
+  const pending = state.pendingWorkspaceAction;
+  if (!pending) throw new Error("No workspace operation is awaiting approval");
+  $("#workspace-approval-dialog").close();
+  state.pendingWorkspaceAction = null;
+  const approvals = {
+    ...(pending.preparationFingerprint ? { preparationApproval: { fingerprint: pending.preparationFingerprint, allowNetwork: true, allowInstallScripts: true, rememberForProject: true } } : {}),
+    ...(pending.verificationFingerprint ? { verificationApproval: { fingerprint: pending.verificationFingerprint, allowVerification: true, rememberForProject: true } } : {}),
+  };
+  await executeTicketAction(pending.request.ticketId, { ...pending.request.body, ...approvals });
 }, false));
 
 async function boot() {

@@ -22,6 +22,9 @@ export function diagnosticFor(code) {
   if (normalized.startsWith("preparation.") || normalized.startsWith("workspace_preparation.")) {
     return { title: t("preparationTitle"), body: t("preparationBody"), action: "open_settings" };
   }
+  if (normalized.startsWith("verification.") || normalized.startsWith("workspace_verification.")) {
+    return { title: t("verificationTitle"), body: t("verificationBody"), action: "open_settings" };
+  }
   if (normalized.startsWith("integration.")) {
     return { title: t("integrationTitle"), body: t("integrationBody"), action: "open_ticket" };
   }

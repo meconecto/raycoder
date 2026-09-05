@@ -16,6 +16,8 @@ import type {
   TicketRepository,
   WorkspacePreparationApproval,
   WorkspacePreparationConfig,
+  WorkspaceVerificationApproval,
+  WorkspaceVerificationConfig,
 } from "@raycoder/core";
 import {
   createTicket,
@@ -28,6 +30,7 @@ import {
   ProjectOperationBusyError,
   UnknownTicketError,
   WorkspacePreparationError,
+  WorkspaceVerificationError,
 } from "@raycoder/core";
 import type { RaycoderApplicationHost } from "./application-host.js";
 import { NativeDirectoryPicker, type DirectoryPicker } from "./platform.js";
@@ -363,6 +366,39 @@ async function routeProjects(
     sendJson(response, 200, { approval: null });
     return true;
   }
+  if (request.method === "GET" && tail === "verification") {
+    let detectedPlan: unknown = null;
+    let diagnostic: { code: string; error: string; details?: unknown } | null = null;
+    try {
+      detectedPlan = await runtime.verification.inspect(runtime.projectRoot);
+    } catch (error) {
+      const verificationError = asWorkspaceVerificationError(error);
+      if (verificationError === null) throw error;
+      diagnostic = {
+        code: verificationError.code,
+        error: verificationError.message,
+        ...(verificationError.details === undefined ? {} : { details: verificationError.details }),
+      };
+    }
+    sendJson(response, 200, {
+      config: runtime.verification.config(),
+      approval: runtime.verification.approval(),
+      detectedPlan,
+      diagnostic,
+      attempts: runtime.repository.listWorkspaceVerificationAttempts(),
+    });
+    return true;
+  }
+  if (request.method === "PUT" && tail === "verification/config") {
+    const body = await readJson(request);
+    sendJson(response, 200, { config: runtime.verification.setConfig(body as unknown as WorkspaceVerificationConfig) });
+    return true;
+  }
+  if (request.method === "DELETE" && tail === "verification/approval") {
+    runtime.verification.revokeApproval();
+    sendJson(response, 200, { approval: null });
+    return true;
+  }
   if (request.method === "POST" && tail === "settings") {
     if (runtime.settings === null) {
       sendJson(response, 409, { error: "This runtime has no global configuration store" });
@@ -645,7 +681,7 @@ async function routeProjects(
     return true;
   }
 
-  const ticketMatch = /^tickets\/([^/]+)\/(history|sessions|dependencies|preparation|actions)$/u.exec(tail);
+  const ticketMatch = /^tickets\/([^/]+)\/(history|sessions|dependencies|preparation|verification|actions)$/u.exec(tail);
   if (ticketMatch === null) return false;
   const encodedTicketId = ticketMatch[1];
   const resource = ticketMatch[2];
@@ -676,6 +712,34 @@ async function routeProjects(
     });
     return true;
   }
+  if (request.method === "GET" && resource === "verification") {
+    const ticket = runtime.repository.get(ticketId);
+    const pendingPreparation = runtime.repository.latestWorkspacePreparationAttempt(ticketId);
+    const verificationWorkspace = pendingPreparation?.purpose === "integration"
+      && pendingPreparation.status === "AWAITING_APPROVAL"
+      ? pendingPreparation.workspace
+      : ticket.workspace ?? runtime.projectRoot;
+    let detectedPlan: unknown = null;
+    let diagnostic: { code: string; error: string; details?: unknown } | null = null;
+    try {
+      detectedPlan = await runtime.verification.inspect(verificationWorkspace);
+    } catch (error) {
+      const verificationError = asWorkspaceVerificationError(error);
+      if (verificationError === null) throw error;
+      diagnostic = {
+        code: verificationError.code,
+        error: verificationError.message,
+        ...(verificationError.details === undefined ? {} : { details: verificationError.details }),
+      };
+    }
+    sendJson(response, 200, {
+      attempts: runtime.repository.listWorkspaceVerificationAttempts(ticketId),
+      latest: runtime.repository.latestWorkspaceVerificationAttempt(ticketId),
+      detectedPlan,
+      diagnostic,
+    });
+    return true;
+  }
   if (request.method === "POST" && resource === "dependencies") {
     const body = await readJson(request);
     if (!Array.isArray(body.predecessorIds) || !body.predecessorIds.every((id) => typeof id === "string")) {
@@ -699,9 +763,11 @@ async function routeProjects(
       if (runtime.scheduler.pendingCount !== 0) throw new ProjectOperationBusyError();
       const dirtyPolicy = body.dirtyPolicy === "committed-head" ? "committed-head" : "cancel";
       const preparationApproval = readPreparationApproval(body.preparationApproval);
+      const verificationApproval = readVerificationApproval(body.verificationApproval);
       sendJson(response, 202, await runtime.scheduler.enqueue(ticketId, {
         dirtyPolicy,
         ...(preparationApproval === undefined ? {} : { preparationApproval }),
+        ...(verificationApproval === undefined ? {} : { verificationApproval }),
       }));
       return true;
     }
@@ -719,6 +785,7 @@ async function routeProjects(
         ticketId,
         body.dirtyPolicy === "committed-head" ? "committed-head" : "cancel",
         readPreparationApproval(body.preparationApproval),
+        readVerificationApproval(body.verificationApproval),
       ));
       return true;
     }
@@ -747,6 +814,7 @@ function serializeTickets(runtime: ProjectRuntime): unknown[] {
     integrationAttempt: runtime.repository.latestIntegrationAttempt(ticket.id),
     review: runtime.repository.reviewDecisions(ticket.id).at(-1) ?? null,
     preparation: runtime.repository.latestWorkspacePreparationAttempt(ticket.id),
+    verification: runtime.repository.latestWorkspaceVerificationAttempt(ticket.id),
   }));
 }
 
@@ -816,6 +884,18 @@ function readPreparationApproval(value: unknown): WorkspacePreparationApproval |
   };
 }
 
+function readVerificationApproval(value: unknown): WorkspaceVerificationApproval | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new WorkspaceVerificationError("verification.plan_changed", "verificationApproval must be an object");
+  }
+  const row = value as Record<string, unknown>;
+  if (typeof row.fingerprint !== "string" || row.allowVerification !== true || row.rememberForProject !== true) {
+    throw new WorkspaceVerificationError("verification.plan_changed", "Verification approval is incomplete or stale");
+  }
+  return { fingerprint: row.fingerprint, allowVerification: true, rememberForProject: true };
+}
+
 function httpError(error: unknown): { status: number; code: string; details?: unknown } {
   const preparationError = asWorkspacePreparationError(error);
   if (preparationError !== null) {
@@ -823,6 +903,14 @@ function httpError(error: unknown): { status: number; code: string; details?: un
       status: preparationError.code === "preparation.custom_step_invalid" ? 400 : 409,
       code: preparationError.code,
       details: preparationError.details,
+    };
+  }
+  const verificationError = asWorkspaceVerificationError(error);
+  if (verificationError !== null) {
+    return {
+      status: verificationError.code === "verification.custom_step_invalid" ? 400 : 409,
+      code: verificationError.code,
+      details: verificationError.details,
     };
   }
   if (error instanceof DependencyCycleError) return { status: 409, code: "planning.cycle" };
@@ -854,6 +942,14 @@ function asWorkspacePreparationError(error: unknown): { code: string; message: s
     message: candidate.message,
     ...(candidate.details === undefined ? {} : { details: candidate.details }),
   };
+}
+
+function asWorkspaceVerificationError(error: unknown): { code: string; message: string; details?: unknown } | null {
+  if (error instanceof WorkspaceVerificationError) return error;
+  if (!(error instanceof Error) || error.name !== "WorkspaceVerificationError") return null;
+  const candidate = error as Error & { readonly code?: unknown; readonly details?: unknown };
+  if (typeof candidate.code !== "string" || !candidate.code.startsWith("verification.")) return null;
+  return { code: candidate.code, message: candidate.message, ...(candidate.details === undefined ? {} : { details: candidate.details }) };
 }
 
 function errorCode(error: unknown): string {
