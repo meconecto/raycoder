@@ -6,6 +6,7 @@ import { state } from "./state.js";
 const $ = (selector) => document.querySelector(selector);
 const content = $("#content");
 const errorBox = $("#error");
+let pendingActions = 0;
 
 async function loadGlobal() {
   const [preflight, projects, memory, preferenceData] = await Promise.all([
@@ -597,12 +598,17 @@ async function refreshPreview() {
 }
 
 async function action(operation, refresh = true) {
+  pendingActions += 1;
+  document.body.setAttribute("aria-busy", "true");
   clearNotice();
   try {
     await operation();
     if (refresh && state.project) await refreshProject();
   } catch (error) {
     showNotice(error);
+  } finally {
+    pendingActions -= 1;
+    if (pendingActions === 0) document.body.removeAttribute("aria-busy");
   }
 }
 

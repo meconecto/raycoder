@@ -172,6 +172,7 @@ test("first run, onboarding, dirty confirmation and cleanup", async ({ page }) =
       page.waitForResponse((response) => response.url().endsWith("/preparation/config") && response.request().method() === "PUT"),
       page.getByRole("button", { name: "Save preparation" }).click(),
     ]);
+    await expect(page.locator("body")).not.toHaveAttribute("aria-busy", "true");
     await expect(page.locator("[data-preparation-unit]")).toHaveCount(2);
     await page.locator("#verification-mode").selectOption("explicit");
     await page.locator("#add-verification-unit").click();
@@ -180,6 +181,7 @@ test("first run, onboarding, dirty confirmation and cleanup", async ({ page }) =
       page.waitForResponse((response) => response.url().endsWith("/verification/config") && response.request().method() === "PUT"),
       page.getByRole("button", { name: "Save verification" }).click(),
     ]);
+    await expect(page.locator("body")).not.toHaveAttribute("aria-busy", "true");
     await expect(page.locator("[data-verification-unit]")).toHaveCount(2);
     await page.getByRole("button", { name: "Tickets", exact: true }).click();
     await page.locator("#ticket-title").fill("Multistack ticket");
