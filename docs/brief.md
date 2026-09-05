@@ -1,4 +1,4 @@
-# raycoder — brief v22 (verificación durable y multistack)
+# raycoder — brief v23 (ejecución Auto opt-in)
 
 ## Qué es esto
 
@@ -420,10 +420,25 @@ Configurable: autorrevisión o revisor independiente. Nivel: global y por proyec
 
 Varios proyectos pueden tener agentes trabajando en simultáneo. Dentro de cada proyecto, el dispatcher es secuencial (un ticket a la vez).
 
-La ejecución manual por ticket es el default. Un modo Auto opt-in queda previsto para una etapa
-posterior: ejecutará secuencialmente tickets `READY` y se pausará ante aprobaciones pendientes,
-bloqueos, fallos o cualquier intervención humana. Auto nunca será el comportamiento implícito al
-confirmar un DAG.
+La ejecución manual por ticket es siempre el default. Auto se activa explícitamente por proyecto
+mediante `Start`; confirmar o reemplazar un DAG, abrir el proyecto o reiniciar raycoder nunca lo
+inicia ni lo reanuda. `Stop` vuelve a dejar el proyecto en modo manual.
+
+Cada corrida Auto y sus eventos son durables. Auto elige de forma estable por fecha de creación e
+ID el próximo ticket `READY` cuyos predecesores estén `DONE`, y ejecuta sólo uno por vez mediante el
+`Scheduler` normal del proyecto. La UI muestra la cola prevista, ticket activo, estado y motivo de
+pausa, además de `Start`, `Pause`, `Resume` y `Stop`. `Pause` y `Stop` son cooperativos: no matan el
+ticket que ya está ejecutándose, pero impiden iniciar el siguiente.
+
+Auto se pausa ante autorización o confirmación pendiente; tickets bloqueados, fallidos, cancelados
+o interrumpidos; proveedor ausente, autenticación o cuota; preparación o verificación fallida; una
+acción manual sobre tickets; un cambio de configuración operativa; o reemplazo del DAG. No salta
+un ticket problemático para continuar con otro y nunca reintenta automáticamente. Cuando ya no
+quedan tickets pendientes completa la corrida y vuelve al default manual.
+
+Al reabrir un proyecto, cualquier corrida que figuraba `RUNNING` pasa durablemente a `PAUSED` con
+motivo de reinicio y requiere `Resume` explícito. SQLite no se usa como prueba de vida del ticket o
+proveedor que hubiera estado activo.
 
 ## Motor de agentes: adaptadores por proveedor
 
@@ -447,7 +462,6 @@ Los proveedores siguientes usan un SDK oficial cuando exista y cubra el contrato
 - Contador de uso en vivo por proveedor.
 - Aislamiento a nivel de sistema operativo.
 - Nuevos adapters de proveedor.
-- Controles y ejecución del modo Auto (deseado como opt-in en una etapa posterior).
 
 ---
 
