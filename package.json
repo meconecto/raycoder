@@ -17,6 +17,7 @@
     "dogfood:rc4": "node scripts/dogfood-rc4.mjs",
     "dogfood:preparation": "node scripts/dogfood-preparation.mjs",
     "dogfood:verification": "node scripts/dogfood-verification.mjs",
+    "dogfood:auto": "node scripts/dogfood-auto.mjs",
     "release:artifact": "node scripts/release.mjs artifact",
     "release:publish:rc": "node scripts/release.mjs publish-rc",
     "release:promote": "node scripts/release.mjs promote",

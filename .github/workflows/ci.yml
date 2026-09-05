@@ -59,6 +59,7 @@ jobs:
       - run: pnpm dogfood:rc4
       - run: pnpm dogfood:preparation
       - run: pnpm dogfood:verification
+      - run: pnpm dogfood:auto
 
   browser-e2e:
     runs-on: ubuntu-latest

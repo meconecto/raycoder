@@ -341,6 +341,66 @@ describe("minimal server", () => {
     }
   }, 20_000);
 
+  it("starts Auto only by explicit project action and exposes its durable queue and journal", async () => {
+    const projectRoot = await createRepository();
+    const registryRoot = mkdtempSync(join(tmpdir(), "raycoder-auto-api-"));
+    temporaryDirectories.push(registryRoot);
+    const projects = new ProjectManager(
+      new ProjectRegistry(join(registryRoot, "projects.db")),
+      () => ({ adapter: new FakeAgentAdapter(), workspaceVerification: false }),
+    );
+    const runtime = await projects.register(projectRoot);
+    const projectId = projects.list()[0]?.project.id;
+    if (projectId === undefined) throw new Error("Expected registered project");
+    runtime.tickets.create({ id: "auto-first", title: "First", description: "first" });
+    runtime.tickets.create({ id: "auto-second", title: "Second", description: "second", predecessorIds: ["auto-first"] });
+    const server = createRaycoderServer({ projects, preflight: executablePreflight() });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as AddressInfo).port;
+    const root = `http://127.0.0.1:${port}/api/projects/${projectId}`;
+    try {
+      expect(await fetch(`${root}/auto`).then((response) => response.json())).toMatchObject({
+        enabled: false,
+        run: null,
+        queue: [{ id: "auto-first" }],
+      });
+      expect(runtime.repository.get("auto-first").status).toBe("READY");
+
+      const foreign = await fetch(`${root}/auto/actions`, {
+        method: "POST",
+        headers: { "content-type": "application/json", origin: "http://evil.example" },
+        body: JSON.stringify({ action: "start" }),
+      });
+      expect(foreign.status).toBe(403);
+      expect(await foreign.json()).toMatchObject({ code: "request.invalid_origin" });
+
+      const start = await fetch(`${root}/auto/actions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "start", dirtyPolicy: "cancel" }),
+      });
+      expect(start.status).toBe(202);
+      const started = await start.json() as { run: { id: string } };
+      await waitFor(() => runtime.repository.getAutoRun(started.run.id).status === "COMPLETED", 10_000);
+
+      const snapshot = await fetch(`${root}/auto`).then((response) => response.json()) as {
+        enabled: boolean;
+        run: { status: string; reasonCode: string };
+        events: { type: string; ticketId: string | null }[];
+      };
+      expect(snapshot).toMatchObject({ enabled: false, run: { status: "COMPLETED", reasonCode: "queue_completed" } });
+      expect(snapshot.events.filter((event) => event.type === "TICKET_STARTED").map((event) => event.ticketId))
+        .toEqual(["auto-first", "auto-second"]);
+      expect(runtime.repository.list().map((ticket) => ticket.status)).toEqual(["DONE", "DONE"]);
+      expect(await fetch(`${root}/activity`).then((response) => response.json())).toMatchObject({
+        items: expect.arrayContaining([expect.objectContaining({ source: "auto", status: "COMPLETED" })]),
+      });
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error === undefined ? resolve() : reject(error)));
+      projects.close();
+    }
+  }, 20_000);
+
   it("requires a fresh verification approval before starting the adapter and exposes durable attempts", async () => {
     const projectRoot = await createRepository();
     writeFileSync(join(projectRoot, "package.json"), JSON.stringify({

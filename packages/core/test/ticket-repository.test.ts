@@ -41,12 +41,13 @@ describe("TicketRepository", () => {
       { version: 6, name: "durable_workspace_preparation" },
       { version: 7, name: "planning_retry_traceability" },
       { version: 8, name: "durable_multistack_verification" },
+      { version: 9, name: "durable_opt_in_auto_runs" },
     ]);
     first.close();
 
     const second = new TicketRepository(path);
     expect(second.get("one").status).toBe("READY");
-    expect(second.appliedMigrations()).toHaveLength(8);
+    expect(second.appliedMigrations()).toHaveLength(9);
     second.close();
   });
 
@@ -68,7 +69,7 @@ describe("TicketRepository", () => {
     const repository = new TicketRepository(path);
     repository.create(fixture("upgraded"));
 
-    expect(repository.appliedMigrations().map((migration) => migration.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    expect(repository.appliedMigrations().map((migration) => migration.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
     expect(repository.get("upgraded").status).toBe("READY");
     repository.close();
   });
@@ -100,7 +101,7 @@ describe("TicketRepository", () => {
     database.close();
 
     const first = new TicketRepository(path);
-    expect(first.appliedMigrations().map((migration) => migration.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    expect(first.appliedMigrations().map((migration) => migration.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
     expect(first.latestPlanningThread()).toMatchObject({ id: "thread-v4", status: "idle" });
     expect(first.planningMessages("thread-v4")).toMatchObject([{ content: "preserved message", sessionId: null }]);
     expect(first.getPlanningArtifact("artifact-v4")).toMatchObject({
@@ -111,7 +112,7 @@ describe("TicketRepository", () => {
     first.close();
 
     const second = new TicketRepository(path);
-    expect(second.appliedMigrations()).toHaveLength(8);
+    expect(second.appliedMigrations()).toHaveLength(9);
     expect(second.listPlanningSessions()).toEqual([]);
     second.close();
   });
@@ -139,12 +140,12 @@ describe("TicketRepository", () => {
 
     const first = new TicketRepository(path);
     expect(first.get("v5-ticket")).toMatchObject({ title: "V5", status: "READY" });
-    expect(first.appliedMigrations().map((migration) => migration.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    expect(first.appliedMigrations().map((migration) => migration.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
     expect(first.listWorkspacePreparationAttempts()).toEqual([]);
     first.close();
 
     const second = new TicketRepository(path);
-    expect(second.appliedMigrations()).toHaveLength(8);
+    expect(second.appliedMigrations()).toHaveLength(9);
     expect(second.get("v5-ticket").description).toBe("preserved");
     second.close();
   });
@@ -179,12 +180,12 @@ describe("TicketRepository", () => {
       errorCode: "quota_exhausted",
       retryOfSessionId: null,
     });
-    expect(repository.appliedMigrations().at(-2)).toEqual({ version: 7, name: "planning_retry_traceability" });
+    expect(repository.appliedMigrations().at(-3)).toEqual({ version: 7, name: "planning_retry_traceability" });
     expect(repository.listWorkspaceVerificationAttempts()).toEqual([]);
     repository.close();
 
     const reopened = new TicketRepository(path);
-    expect(reopened.appliedMigrations()).toHaveLength(8);
+    expect(reopened.appliedMigrations()).toHaveLength(9);
     reopened.close();
   });
 
@@ -217,12 +218,44 @@ describe("TicketRepository", () => {
       expect.objectContaining({ fromStatus: null, toStatus: "READY", reason: "created" }),
     ]);
     expect(upgraded.listWorkspaceVerificationAttempts()).toEqual([]);
-    expect(upgraded.appliedMigrations().at(-1)).toEqual({ version: 8, name: "durable_multistack_verification" });
+    expect(upgraded.appliedMigrations().at(-2)).toEqual({ version: 8, name: "durable_multistack_verification" });
     upgraded.close();
 
     const reopened = new TicketRepository(path);
-    expect(reopened.appliedMigrations()).toHaveLength(8);
+    expect(reopened.appliedMigrations()).toHaveLength(9);
     expect(reopened.history("v7-ticket")).toHaveLength(1);
+    reopened.close();
+  });
+
+  it("upgrades a real v8 database to v9 idempotently without activating Auto", () => {
+    const directory = mkdtempSync(join(tmpdir(), "raycoder-db-v8-"));
+    temporaryDirectories.push(directory);
+    const path = join(directory, "raycoder.db");
+    const database = new SqliteDatabase(path);
+    database.exec(`CREATE TABLE schema_migrations (
+      version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL
+    );`);
+    for (const migration of migrations.slice(0, 8)) {
+      database.exec(migration.sql);
+      database.prepare("INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)")
+        .run(migration.version, migration.name, "2026-09-02T00:00:00.000Z");
+    }
+    database.prepare(`INSERT INTO tickets
+      (id, title, description, status, blocked_from, branch, base_branch, base_commit, workspace, created_at, updated_at)
+      VALUES ('v8-ticket', 'V8', 'preserved', 'READY', NULL, NULL, 'main', NULL, NULL, ?, ?)`)
+      .run("2026-09-02T00:00:00.000Z", "2026-09-02T00:00:00.000Z");
+    database.close();
+
+    const upgraded = new TicketRepository(path);
+    expect(upgraded.get("v8-ticket").status).toBe("READY");
+    expect(upgraded.autoRunEnabled()).toBe(false);
+    expect(upgraded.listAutoRuns()).toEqual([]);
+    expect(upgraded.appliedMigrations().at(-1)).toEqual({ version: 9, name: "durable_opt_in_auto_runs" });
+    upgraded.close();
+
+    const reopened = new TicketRepository(path);
+    expect(reopened.appliedMigrations()).toHaveLength(9);
+    expect(reopened.latestAutoRun()).toBeNull();
     reopened.close();
   });
 
