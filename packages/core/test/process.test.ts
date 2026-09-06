@@ -1,4 +1,6 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { delimiter, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { NodeProcessRunner, ProcessExecutionError } from "../src/process.js";
 
@@ -31,5 +33,34 @@ describe("NodeProcessRunner", () => {
     await expect(running).rejects.toSatisfy((error: unknown) =>
       error instanceof ProcessExecutionError && error.result.stderr.includes("Process cancelled"));
     expect(processId).toBeGreaterThan(0);
+  });
+
+  it("runs Windows package-manager CMD shims through an explicit interpreter without enabling shell mode", async () => {
+    if (process.platform !== "win32") return;
+    const directory = mkdtempSync(join(tmpdir(), "raycoder-cmd-runner-"));
+    try {
+      const shimDirectory = join(directory, "batch shims");
+      mkdirSync(shimDirectory);
+      const launcher = join(shimDirectory, "fixture-runner.cmd");
+      writeFileSync(
+        launcher,
+        `@"${process.execPath}" -e "process.stdout.write(process.argv[1])" %1\r\n`,
+        "utf8",
+      );
+      const environment = {
+        ...process.env,
+        PATH: `${shimDirectory}${delimiter}${process.env.PATH ?? ""}`,
+        PATHEXT: ".COM;.EXE;.BAT;.CMD",
+      };
+      const runner = new NodeProcessRunner();
+
+      const result = await runner.run("fixture-runner", ["literal two words"], { cwd: directory, env: environment });
+
+      expect(result.stdout).toBe("literal two words");
+      await expect(runner.run("fixture-runner", ["unsafe & injected"], { cwd: directory, env: environment }))
+        .rejects.toThrow("unsupported command characters");
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 });
