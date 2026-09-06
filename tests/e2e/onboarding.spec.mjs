@@ -4,6 +4,8 @@ import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { expect, test } from "@playwright/test";
 
+/* global document, fetch */
+
 test("first run, onboarding, dirty confirmation and cleanup", async ({ page }) => {
   test.setTimeout(90_000);
   const parent = mkdtempSync(join(tmpdir(), "raycoder-browser-e2e-"));
@@ -45,14 +47,29 @@ test("first run, onboarding, dirty confirmation and cleanup", async ({ page }) =
     await page.locator("#theme-select").selectOption("light");
     await expect(page.locator("html")).toHaveAttribute("lang", "es");
     await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+    await expect(page.getByRole("heading", { name: "Definamos el trabajo juntos" })).toBeVisible();
+    await expect(page.getByRole("button", { name: /1\. Idea \/ Plan: actual/u })).toBeVisible();
+    await page.getByRole("button", { name: /2\. Tickets:/u }).click();
+    await expect(page.locator("#planning-artifacts")).toBeFocused();
     await page.reload();
     await expect(page.locator("#locale-select")).toHaveValue("es");
     await expect(page.locator("#theme-select")).toHaveValue("light");
+    await expect(page.getByRole("heading", { name: "Abrí un repositorio o empezá con una carpeta vacía." })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Abrir carpeta existente" })).toBeVisible();
     await page.locator("#locale-select").selectOption("en");
     await page.locator("#theme-select").selectOption("dark");
     await page.locator("#projects [data-project]").click();
 
     await page.getByRole("button", { name: "Planning", exact: true }).click();
+    await page.locator("#planning-message").fill("first line");
+    await page.locator("#planning-message").press("Shift+Enter");
+    await expect(page.locator("#planning-message")).toHaveValue("first line\n");
+    await page.locator("#planning-message").fill("[commands] Show useful command events");
+    await page.locator("#planning-message").press("Enter");
+    await expect(page.locator("#planning-operation")).toContainText("git status --short");
+    await expect(page.locator("#planning-operation")).toContainText("pnpm typecheck");
+    await expect(page.locator("#planning-operation")).toContainText("exit 0");
+    await expect(page.locator(".message.assistant").filter({ hasText: "[commands]" })).toContainText("Fake turn 1");
     await page.locator("#planning-message").fill("[quota-once] Plan a feature without losing my message");
     await page.getByRole("button", { name: "Send", exact: true }).click();
     await expect(page.getByRole("heading", { name: "Usage limit reached" })).toBeVisible();
@@ -67,9 +84,31 @@ test("first run, onboarding, dirty confirmation and cleanup", async ({ page }) =
     await expect(page.getByRole("heading", { name: "0 needs attention" })).toBeVisible();
     await page.getByRole("button", { name: "Planning", exact: true }).click();
     await page.locator("#planning-message").fill("Plan a conversational release slice");
-    await page.getByRole("button", { name: "Send", exact: true }).click();
+    await page.locator("#planning-message").press("Enter");
     await expect(page.locator(".message.user").filter({ hasText: "Plan a conversational release slice" })).toBeVisible();
     await expect(page.locator(".message.assistant").filter({ hasText: "Plan a conversational release slice" })).toContainText("Fake turn 1");
+    for (let index = 1; index <= 7; index += 1) {
+      const message = `Scroll fixture ${index}`;
+      await page.locator("#planning-message").fill(message);
+      await page.locator("#planning-message").press("Enter");
+      await expect(page.locator(".message.assistant").filter({ hasText: message })).toBeVisible();
+    }
+    const transcript = page.locator("#planning-transcript");
+    await transcript.evaluate((node) => { node.scrollTop = 0; });
+    const scrollBefore = await transcript.evaluate((node) => node.scrollTop);
+    await page.evaluate(async () => {
+      const projectId = document.querySelector("#projects [data-project].active")?.dataset.project;
+      const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/planning/messages`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ content: "New message while reading history" }),
+      });
+      if (!response.ok) throw new Error(await response.text());
+    });
+    await expect(page.locator("#planning-new-messages")).toBeVisible();
+    expect(await transcript.evaluate((node) => node.scrollTop)).toBe(scrollBefore);
+    await page.locator("#planning-new-messages").click();
+    await expect.poll(() => transcript.evaluate((node) => Math.round(node.scrollHeight - node.scrollTop - node.clientHeight))).toBeLessThanOrEqual(1);
     await page.getByRole("button", { name: "Generate SPEC from conversation" }).click();
     const generatedSpec = page.locator(".artifact-card").filter({ hasText: "spec v1" });
     await expect(generatedSpec).toContainText("Deterministic specification");
@@ -131,21 +170,21 @@ test("first run, onboarding, dirty confirmation and cleanup", async ({ page }) =
     await expect(page.locator("#workspace-approval-commands")).toContainText("pnpm run verify");
     const firstFingerprint = await page.locator("#workspace-approval-fingerprint").textContent();
     await page.getByRole("button", { name: "Approve for this project" }).click();
-    await expect(browserTicket.getByText("BLOCKED", { exact: true })).toBeVisible();
+    await expect(browserTicket.getByText("blocked", { exact: true })).toBeVisible();
     await expect(browserTicket.getByText(/base_checkout_dirty/u)).toBeVisible();
     rmSync(join(project, "local-only.txt"), { force: true });
     await page.getByRole("button", { name: "Overview", exact: true }).click();
     await expect(page.getByText(/main · [a-f0-9]{10} · clean/u)).toBeVisible({ timeout: 8_000 });
     await page.getByRole("button", { name: "Tickets", exact: true }).click();
     await browserTicket.getByRole("button", { name: "Retry", exact: true }).click();
-    await expect(browserTicket.getByText("DONE", { exact: true })).toBeVisible();
+    await expect(browserTicket.getByText("done", { exact: true })).toBeVisible();
 
     await page.locator("#ticket-title").fill("Approval reuse");
     await page.locator("#ticket-description").fill("Reuse the unchanged preparation fingerprint");
     await page.getByRole("button", { name: "Create", exact: true }).click();
     const reused = page.locator(".card").filter({ hasText: "Approval reuse" });
     await reused.getByRole("button", { name: "Run", exact: true }).click();
-    await expect(reused.getByText("DONE", { exact: true })).toBeVisible();
+    await expect(reused.getByText("done", { exact: true })).toBeVisible();
     await expect(page.locator("#workspace-approval-dialog")).not.toBeVisible();
 
     writeFileSync(join(project, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\nrevision: 2\n", "utf8");
@@ -159,7 +198,7 @@ test("first run, onboarding, dirty confirmation and cleanup", async ({ page }) =
     await expect(page.locator("#workspace-approval-dialog")).toBeVisible();
     expect(await page.locator("#workspace-approval-fingerprint").textContent()).not.toBe(firstFingerprint);
     await page.getByRole("button", { name: "Approve for this project" }).click();
-    await expect(changedLock.getByText("DONE", { exact: true })).toBeVisible();
+    await expect(changedLock.getByText("done", { exact: true })).toBeVisible();
 
     writeFileSync(join(project, "go.mod"), "module example.test/e2e\n\ngo 1.24\n", "utf8");
     execFileSync("git", ["add", "go.mod"], { cwd: project });
@@ -192,14 +231,14 @@ test("first run, onboarding, dirty confirmation and cleanup", async ({ page }) =
     await expect(page.locator("#workspace-approval-commands")).toContainText("go mod verify");
     await expect(page.locator("#workspace-approval-commands")).toContainText("go test ./...");
     await page.getByRole("button", { name: "Approve for this project" }).click();
-    await expect(multistack.getByText("DONE", { exact: true })).toBeVisible();
+    await expect(multistack.getByText("done", { exact: true })).toBeVisible();
 
     const plannedCore = page.locator(".card").filter({ hasText: "Build core" });
     const plannedUi = page.locator(".card").filter({ hasText: "Build UI" });
     await plannedCore.getByRole("button", { name: "Cancel", exact: true }).click();
-    await expect(plannedCore.getByText("CANCELLED", { exact: true })).toBeVisible();
+    await expect(plannedCore.getByText("cancelled", { exact: true })).toBeVisible();
     await plannedUi.getByRole("button", { name: "Cancel", exact: true }).click();
-    await expect(plannedUi.getByText("CANCELLED", { exact: true })).toBeVisible();
+    await expect(plannedUi.getByText("cancelled", { exact: true })).toBeVisible();
 
     writeFileSync(join(project, "package.json"), JSON.stringify({
       private: true,
@@ -218,13 +257,13 @@ test("first run, onboarding, dirty confirmation and cleanup", async ({ page }) =
     await page.getByRole("button", { name: "Approve and resume", exact: true }).click();
     await expect(page.getByRole("heading", { name: "Allow workspace setup and verification?" })).toBeVisible();
     await page.getByRole("button", { name: "Approve for this project" }).click();
-    await expect(failedPreparation.getByText("BLOCKED", { exact: true })).toBeVisible();
+    await expect(failedPreparation.getByText("blocked", { exact: true })).toBeVisible();
     await expect(failedPreparation).toContainText("preparation.failed");
     await expect(page.locator(".auto-reason")).toContainText("preparation.failed");
     await failedPreparation.getByRole("button", { name: "Retry", exact: true }).click();
-    await expect(failedPreparation.getByText("DONE", { exact: true })).toBeVisible();
+    await expect(failedPreparation.getByText("done", { exact: true })).toBeVisible();
     await page.getByRole("button", { name: "Stop Auto", exact: true }).click();
-    await expect(page.locator(".auto-panel")).toContainText("STOPPED");
+    await expect(page.locator(".auto-panel")).toContainText("stopped");
 
     await page.reload();
     await page.locator("#projects [data-project]").click();
@@ -234,8 +273,8 @@ test("first run, onboarding, dirty confirmation and cleanup", async ({ page }) =
     await expect(page.locator("#verification-mode")).toHaveValue("explicit");
     await expect(page.locator("[data-verification-unit]")).toHaveCount(2);
     await page.getByRole("button", { name: "Tickets", exact: true }).click();
-    await expect(page.locator(".card:not(.auto-panel)").filter({ hasText: "Preparation retry" }).getByText("DONE", { exact: true })).toBeVisible();
-    await expect(page.locator(".auto-panel")).toContainText("STOPPED");
+    await expect(page.locator(".card:not(.auto-panel)").filter({ hasText: "Preparation retry" }).getByText("done", { exact: true })).toBeVisible();
+    await expect(page.locator(".auto-panel")).toContainText("stopped");
 
     writeFileSync(join(project, "local-preserved.txt"), "cleanup must preserve the checkout\n", "utf8");
 

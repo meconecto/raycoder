@@ -31,6 +31,12 @@ class E2EAgentAdapter extends FakeAgentAdapter {
       };
       return;
     }
+    if (prompt.includes("[commands]")) {
+      for (const command of ["git status --short", "pnpm typecheck", "pnpm test"]) {
+        yield { type: "command", timestamp: new Date().toISOString(), command, cwd: fixtureRoot, exitCode: 0, output: `${command}: ok` };
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1_250));
+    }
     yield* super.send(session, prompt);
   }
 }
