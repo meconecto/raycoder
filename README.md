@@ -2,7 +2,7 @@
 
 raycoder is a local, browser-based orchestrator for coding agents. Its engine gives every ticket an isolated Git workspace, records lifecycle and dependency history in SQLite, integrates reviewed work against the current base branch, and recovers conservatively after crashes.
 
-The `1.0.0-rc.8` candidate adds an actionable bilingual UI, durable workspace preparation and multistack verification, conversational planning, confirmed DAG creation, and an atomic user-local installer with update, rollback, and conservative uninstall.
+The `1.0.0-rc.9` candidate adds opt-in sequential Auto execution, real-provider workflow stabilization, an actionable bilingual UI, durable multistack preparation and verification, conversational planning, and an atomic user-local installer with update, rollback, and conservative uninstall.
 
 ## Install and run
 
