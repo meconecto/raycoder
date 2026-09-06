@@ -26,7 +26,7 @@ export class SdkCodexRuntime implements CodexRuntime {
   public createThread(input: StartSessionInput): CodexRuntimeThread {
     const options = {
       workingDirectory: input.workspace,
-      sandboxMode: "workspace-write" as const,
+      sandboxMode: input.sandboxMode ?? "workspace-write",
       approvalPolicy: "never" as const,
       networkAccessEnabled: false,
       skipGitRepoCheck: false,

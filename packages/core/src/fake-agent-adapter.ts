@@ -51,7 +51,7 @@ export class FakeAgentAdapter implements AgentAdapter {
       cancellation: true,
       resumableSessions: false,
       nativeSkills: false,
-      sandboxModes: ["workspace-write"],
+      sandboxModes: ["read-only", "workspace-write"],
       models: [{ id: "deterministic", efforts: null }],
     };
   }

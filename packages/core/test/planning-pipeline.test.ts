@@ -29,7 +29,7 @@ class ResumablePlanningAdapter implements AgentAdapter {
       cancellation: true,
       resumableSessions: true,
       nativeSkills: false,
-      sandboxModes: ["workspace-write"],
+      sandboxModes: ["read-only", "workspace-write"],
       models: [{ id: "test", efforts: null }],
     };
   }
@@ -243,6 +243,7 @@ describe("PlanningPipeline", () => {
     expect(resumed.resumedFromSessionId).toBe(original.id);
     await pipeline.runSession(resumed.id);
     expect(adapter.starts.at(-1)?.resumeProviderSessionId).toBe("opaque-provider-id");
+    expect(adapter.starts.at(-1)?.sandboxMode).toBe("read-only");
     expect(repository.getPlanningSession(resumed.id).status).toBe("completed");
     repository.close();
   });

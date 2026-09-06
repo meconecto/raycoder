@@ -134,6 +134,7 @@ export class Dispatcher {
         workspace: metadata.workspace,
         additionalWritableDirectories,
         purpose: "implementation",
+        sandboxMode: "workspace-write",
         ...(request.model === undefined ? {} : { model: request.model }),
         ...(request.effort === undefined ? {} : { effort: request.effort }),
         ...(capabilities.resumableSessions && previous?.providerSessionId !== null && previous?.providerSessionId !== undefined
@@ -212,6 +213,7 @@ export class Dispatcher {
         reviewSession = await this.#reviewAdapter.startSession({
           workspace: metadata.workspace,
           purpose: "review",
+          sandboxMode: "read-only",
           ...(request.model === undefined ? {} : { model: request.model }),
           ...(request.effort === undefined ? {} : { effort: request.effort }),
         });

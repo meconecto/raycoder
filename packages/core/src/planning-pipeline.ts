@@ -324,6 +324,7 @@ export class PlanningPipeline {
       adapterSession = await this.#adapter.startSession({
         workspace: this.#projectRoot,
         purpose: "planning",
+        sandboxMode: "read-only",
         ...(request.resumeProviderSessionId === undefined ? {} : { resumeProviderSessionId: request.resumeProviderSessionId }),
       });
       persisted = this.#repository.updatePlanningSession(sessionId, {
