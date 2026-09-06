@@ -1,4 +1,4 @@
-# raycoder — brief v23 (ejecución Auto opt-in)
+# raycoder — brief v24 (interfaz bilingüe e interacción accesible)
 
 ## Qué es esto
 
@@ -130,10 +130,25 @@ principal combina las vistas `Overview`, `Plan`, `Tickets` y `Activity` con un p
 como herramientas avanzadas. `Overview` ofrece una siguiente acción derivada exclusivamente del
 estado durable, nunca de estado efímero del navegador.
 
-La UI se ofrece en español e inglés y respeta por defecto idioma y esquema de color del sistema.
-El usuario puede fijar idioma y tema claro/oscuro; estas preferencias son globales y se guardan en
-la configuración propia de raycoder. Todo control debe ser usable con teclado, mantener foco
-visible, exponer estados mediante texto además de color y respetar movimiento reducido.
+La UI se ofrece íntegramente en español e inglés y respeta por defecto idioma y esquema de color
+del sistema. Todos los textos propios de la interfaz —incluidos estados, vacíos, formularios,
+diálogos, acciones, ayuda y accesibilidad— pertenecen a catálogos simétricos y extensibles. Los
+mensajes del usuario y del proveedor, comandos, rutas, códigos y salida técnica se preservan sin
+traducir como evidencia. El usuario puede fijar idioma y tema claro/oscuro; estas preferencias son
+globales y se guardan en la configuración propia de raycoder.
+
+El progreso `Idea/Plan → Tickets → Ejecución → Integración` es navegación contextual accesible,
+no un indicador inerte: cada etapa abre la vista y sección vigente que permite entender su estado,
+lo pendiente y la próxima acción, incluso antes de haber comenzado. Todo control debe ser usable
+con teclado, mantener foco visible, exponer estados mediante texto además de color y respetar
+movimiento reducido.
+
+La conversación se actualiza por polling sin reconstruir el editor ni perder borrador, foco,
+selección o posición de lectura. Sigue los mensajes nuevos sólo cuando el usuario está al final; si
+está leyendo mensajes anteriores conserva la posición y ofrece una acción localizada para volver
+al final. `Enter` envía, `Shift+Enter` inserta una línea y la composición IME nunca dispara un envío.
+Los eventos normalizados muestran un resumen semántico; en particular, un evento de comando
+muestra el comando real y su resultado en lugar de una etiqueta genérica repetida.
 
 Un estado `error` nunca se representa como una etiqueta genérica ni desaparece al refrescar. La UI
 muestra código durable, explicación localizada, acción permitida y detalle técnico sanitizado. Los
