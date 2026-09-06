@@ -10,7 +10,7 @@
 <body>
   <div class="shell">
     <aside class="sidebar">
-      <button class="brand" id="home" aria-label="Project selector">ray<span>coder</span></button>
+      <button class="brand" id="home" data-i18n-aria-label="projectSelector" aria-label="Project selector">ray<span>coder</span></button>
       <div class="eyebrow" id="projects-label">Projects</div>
       <div id="projects" class="project-list"></div>
       <button id="add-project" class="wide">+ Add project</button>
@@ -26,8 +26,8 @@
         <div><p class="kicker" id="view-kicker">Local workspace</p><h1 id="project-name">Choose where to work</h1><p id="project-path"></p></div>
         <div id="health" class="health"></div>
       </header>
-      <div id="progress" class="progress-rail" aria-label="Project progress"></div>
-      <nav class="nav hidden" id="nav" aria-label="Project views">
+      <div id="progress" class="progress-rail" data-i18n-aria-label="projectProgress" aria-label="Project progress"></div>
+      <nav class="nav hidden" id="nav" data-i18n-aria-label="projectViews" aria-label="Project views">
         <button data-tab="overview" class="active">Overview</button>
         <button data-tab="planning" aria-label="Planning">Planning</button>
         <button data-tab="tickets">Tickets</button>
@@ -46,33 +46,33 @@
 
   <dialog id="project-dialog">
     <form method="dialog" class="stack" id="project-form">
-      <div><p class="kicker">Project onboarding</p><h2>Open a workspace</h2></div>
-      <label>Folder path<div class="field-row"><input id="new-project-path" placeholder="Absolute folder path" required><button type="button" id="browse-project">Browse…</button></div></label>
-      <label>Display name <span class="muted">optional</span><input id="new-project-name" placeholder="Defaults to folder name"></label>
-      <div id="inspection" class="inspection muted">Enter a path to inspect it without changing anything.</div>
-      <div class="actions"><button value="cancel" formnovalidate>Cancel</button><button type="button" id="inspect-project">Inspect</button><button type="button" id="save-project" class="primary" disabled>Confirm operation</button></div>
+      <div><p class="kicker" data-i18n="projectOnboarding">Project onboarding</p><h2 data-i18n="openWorkspace">Open a workspace</h2></div>
+      <label><span data-i18n="folderPath">Folder path</span><div class="field-row"><input id="new-project-path" data-i18n-placeholder="absoluteFolderPath" placeholder="Absolute folder path" required><button type="button" id="browse-project" data-i18n="browse">Browse…</button></div></label>
+      <label><span data-i18n="displayName">Display name</span> <span class="muted" data-i18n="optional">optional</span><input id="new-project-name" data-i18n-placeholder="defaultsFolderName" placeholder="Defaults to folder name"></label>
+      <div id="inspection" class="inspection muted" data-i18n="enterPathInspect">Enter a path to inspect it without changing anything.</div>
+      <div class="actions"><button value="cancel" formnovalidate data-i18n="cancel">Cancel</button><button type="button" id="inspect-project" data-i18n="inspect">Inspect</button><button type="button" id="save-project" class="primary" data-i18n="confirmOperation" disabled>Confirm operation</button></div>
     </form>
   </dialog>
 
   <dialog id="cleanup-dialog">
     <form method="dialog" class="stack" id="cleanup-form">
-      <div><p class="kicker danger">Destructive operation</p><h2>Cleanup project data</h2></div>
-      <p class="muted">Review every exact target. Risky work is preserved unless you select it and enable force.</p>
+      <div><p class="kicker danger" data-i18n="destructiveOperation">Destructive operation</p><h2 data-i18n="cleanupProjectData">Cleanup project data</h2></div>
+      <p class="muted" data-i18n="cleanupReview">Review every exact target. Risky work is preserved unless you select it and enable force.</p>
       <div id="cleanup-targets" class="target-list"></div>
       <div id="cleanup-warnings" class="warning"></div>
-      <label><input type="checkbox" id="cleanup-force" class="inline"> Allow forced deletion of selected risky work</label>
-      <label>Confirmation phrase<input id="cleanup-phrase" autocomplete="off"></label>
-      <div class="actions"><button value="cancel" formnovalidate>Cancel</button><button type="button" id="execute-cleanup" class="danger-button">Delete selected data</button></div>
+      <label><input type="checkbox" id="cleanup-force" class="inline"> <span data-i18n="allowForcedDeletion">Allow forced deletion of selected risky work</span></label>
+      <label><span data-i18n="confirmationPhrase">Confirmation phrase</span><input id="cleanup-phrase" autocomplete="off"></label>
+      <div class="actions"><button value="cancel" formnovalidate data-i18n="cancel">Cancel</button><button type="button" id="execute-cleanup" class="danger-button" data-i18n="deleteSelectedData">Delete selected data</button></div>
     </form>
   </dialog>
 
   <dialog id="workspace-approval-dialog">
     <form method="dialog" class="stack" id="workspace-approval-form">
-      <div><p class="kicker">Workspace operation</p><h2 id="workspace-approval-title">Allow reproducible commands?</h2></div>
-      <p id="workspace-approval-description">Review every command below. It runs with your local raycoder permissions.</p>
+      <div><p class="kicker" data-i18n="workspaceOperation">Workspace operation</p><h2 id="workspace-approval-title" data-i18n="allowCommands">Allow reproducible commands?</h2></div>
+      <p id="workspace-approval-description" data-i18n="approveCommandsBody">Review every command below. It runs with your local raycoder permissions.</p>
       <div id="workspace-approval-commands" class="target-list"></div>
       <small id="workspace-approval-fingerprint" class="muted"></small>
-      <div class="actions"><button value="cancel" formnovalidate>Cancel</button><button type="button" id="approve-workspace" class="primary">Approve for this project</button></div>
+      <div class="actions"><button value="cancel" formnovalidate data-i18n="cancel">Cancel</button><button type="button" id="approve-workspace" class="primary" data-i18n="approveProject">Approve for this project</button></div>
     </form>
   </dialog>
 
