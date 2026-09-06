@@ -28,6 +28,7 @@ export interface StartSessionInput {
   readonly workspace: string;
   readonly additionalWritableDirectories?: readonly string[];
   readonly purpose?: "implementation" | "review" | "planning";
+  readonly sandboxMode?: "read-only" | "workspace-write";
   readonly model?: string;
   readonly effort?: string;
   readonly resumeProviderSessionId?: string;

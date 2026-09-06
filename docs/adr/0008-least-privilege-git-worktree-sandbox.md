@@ -29,7 +29,7 @@ current symbolic branch. It gives the adapter four additional writable directori
 Every common path is checked to remain inside Git's reported common metadata directory. The
 Codex adapter maps this list to SDK `additionalDirectories` while retaining
 `workspace-write`, disabled network access and `never` approval. Independent review and
-planning threads receive no Git metadata write access.
+planning threads run with `read-only` sandbox mode and receive no Git metadata write access.
 
 ## Consequences
 

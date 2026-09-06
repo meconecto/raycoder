@@ -76,7 +76,9 @@ describe("Dispatcher with deterministic adapter", () => {
     ]);
     expect(repository.history("demo").some((entry) => entry.toStatus === "DONE")).toBe(false);
     expect(adapter.starts[0]?.additionalWritableDirectories).toHaveLength(4);
+    expect(adapter.starts[0]?.sandboxMode).toBe("workspace-write");
     expect(adapter.starts[1]?.purpose).toBe("review");
+    expect(adapter.starts[1]?.sandboxMode).toBe("read-only");
     expect(adapter.starts[1]?.additionalWritableDirectories).toBeUndefined();
     repository.close();
   });

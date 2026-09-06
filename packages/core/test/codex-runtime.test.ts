@@ -41,9 +41,11 @@ describe("SdkCodexRuntime", () => {
     new SdkCodexRuntime(codex).createThread({
       workspace: "/fixture/workspace",
       additionalWritableDirectories: ["/fixture/.git/worktrees/ticket"],
+      sandboxMode: "read-only",
       resumeProviderSessionId: "thread-existing",
     });
     expect(observedId).toBe("thread-existing");
     expect(observed?.additionalDirectories).toEqual(["/fixture/.git/worktrees/ticket"]);
+    expect(observed?.sandboxMode).toBe("read-only");
   });
 });

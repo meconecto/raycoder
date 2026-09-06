@@ -41,7 +41,7 @@ export class CodexAgentAdapter implements AgentAdapter {
       cancellation: true,
       resumableSessions: true,
       nativeSkills: true,
-      sandboxModes: ["workspace-write"],
+      sandboxModes: ["read-only", "workspace-write"],
       models: [
         {
           id: "default",
